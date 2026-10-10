@@ -59,6 +59,14 @@ certificate by itself; with nginx, run `certbot --nginx`). Then `https://courses
 Images are built by GitHub Actions ([`.github/workflows/image.yml`](.github/workflows/image.yml)) after the tests
 pass: `:latest` and `:sha-…` from `main`, `:1.2.3` and `:1.2` from tags `v1.2.3`.
 
+### Try a course before the app syncs
+
+Share a course file directly (a [course document](#course-document) or a `flashcert-course-1` bundle):
+
+```bash
+docker compose exec -T share flashcert-share import /dev/stdin --certification "Claude Agent SDK" < bundle.json
+```
+
 ## How sharing works
 
 **One way, from the app to the server.** The app sends a course; all that comes back is its link, its visibility
@@ -132,14 +140,6 @@ its next change, when the app sends it again.
 
 With PostgreSQL ([below](#postgresql)) the data is in the `pgdata` volume instead:
 `docker compose exec db pg_dump -U flashcert flashcert > flashcert-share.sql`.
-
-### Try a course before the app syncs
-
-Share a course file directly (a [course document](#course-document) or a `flashcert-course-1` bundle):
-
-```bash
-docker compose exec -T share flashcert-share import /dev/stdin --certification "Claude Agent SDK" < bundle.json
-```
 
 ## Settings
 
