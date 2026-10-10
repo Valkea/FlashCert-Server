@@ -8,7 +8,7 @@ RUN pip install --no-cache-dir --prefix=/install ".[postgres]"
 FROM python:3.12-slim
 LABEL org.opencontainers.image.title="flashcert-share" \
       org.opencontainers.image.description="Read-only web sharing for FlashCert courses" \
-      org.opencontainers.image.source="https://github.com/Valkea/FlashCert"
+      org.opencontainers.image.source="https://github.com/Valkea/FlashCert-Server"
 COPY --from=build /install /usr/local
 RUN useradd --system --uid 10001 --home-dir /data --create-home flashcert
 USER flashcert

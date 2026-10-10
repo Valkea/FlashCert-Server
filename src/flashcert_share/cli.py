@@ -187,7 +187,7 @@ def main(argv: list[str] | None = None) -> None:
     p = sub.add_parser("courses", help="list shared courses")
     p.set_defaults(func=cmd_courses)
 
-    p = sub.add_parser("import", help="share a course JSON file (flashcert-share-1 or a harness bundle)")
+    p = sub.add_parser("import", help="share a course JSON file (flashcert-share-1 or flashcert-course-1)")
     p.add_argument("file")
     p.add_argument("--uid", help="course id; importing again with the same uid replaces it")
     p.add_argument("--certification")

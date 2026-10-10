@@ -15,7 +15,7 @@ Format "flashcert-share-1" (what the app sends)::
       "cards": [{"id": "c7", "front": "...", "back": "...", "sources": [...]}]
     }
 
-The harness' "flashcert-course-1" bundles are accepted too (transcript, analysis and costs are dropped).
+"flashcert-course-1" bundles (full course exports) are accepted too (transcript, analysis and costs are dropped).
 """
 
 from __future__ import annotations

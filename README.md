@@ -12,37 +12,58 @@ anything. They can flag an error on any element, and the app collects those repo
   Turning it on also asks the browser for *persistent storage*; the page explains why.
 * One Docker image (Python, Flask, SQLAlchemy). SQLite by default, PostgreSQL by changing one URL. No CDN.
 
-## Run it
+## Host your own
 
-The server ships as a Docker image, `ghcr.io/valkea/flashcert-share`, built by GitHub Actions
-([`.github/workflows/share-server-image.yml`](../.github/workflows/share-server-image.yml)) on every push to `main`
-that touches `server/` (`:latest`, `:sha-…`) and on tags `share-v1.2.3` (`:1.2.3`, `:1.2`), for amd64 and arm64.
+You need a server reachable from the internet (a small VPS is plenty) with Docker and Docker Compose, a domain or
+subdomain pointing at it, and a reverse proxy that handles HTTPS (nginx, Caddy, Traefik…).
 
-On the VPS, in a folder holding [`compose.yaml`](compose.yaml) and a `.env` made from [`.env.example`](.env.example):
+**1. Get the compose file and the settings**, in an empty folder on the server:
+
+```bash
+mkdir flashcert-share && cd flashcert-share
+curl -fsSLO https://raw.githubusercontent.com/Valkea/FlashCert-Server/main/compose.yaml
+curl -fsSL https://raw.githubusercontent.com/Valkea/FlashCert-Server/main/.env.example -o .env
+```
+
+(Or `git clone https://github.com/Valkea/FlashCert-Server.git` and work in that folder.)
+
+**2. Edit `.env`**: set `FLASHCERT_SHARE_PUBLIC_URL` to the address visitors will open, e.g.
+`https://courses.example.com`. The other settings can stay as they are (see [Settings](#settings)).
+
+**3. Start it and create a token** for the app:
 
 ```bash
 docker compose up -d
-docker compose exec share flashcert-share token create --label phone   # prints the token for the app, once
+docker compose exec share flashcert-share token create --label phone   # prints the token, once
 ```
 
-The container listens on `127.0.0.1:8080` of the host (change `FLASHCERT_SHARE_PORT`), keeps its SQLite file in
-the `data` volume and restarts by itself. Point a (sub)domain or a path of your reverse proxy at it:
-[`deploy/nginx.conf`](deploy/nginx.conf) or [`deploy/Caddyfile`](deploy/Caddyfile). Under a path
-(`example.com/courses/`) the proxy sends `X-Forwarded-Prefix` and `FLASHCERT_SHARE_PUBLIC_URL` includes the path.
-`GET /healthz` answers `{"ok": true}` and backs the image's health check.
+**4. Put it behind HTTPS.** The container listens on `127.0.0.1:8080` of the host only. Point your domain at it
+with [`deploy/nginx.conf`](deploy/nginx.conf) or [`deploy/Caddyfile`](deploy/Caddyfile) (Caddy gets the
+certificate by itself; with nginx, run `certbot --nginx`). Then `https://courses.example.com/healthz` should answer
+`{"ok": true}`.
 
-Upgrade: `docker compose pull && docker compose up -d` (pin a version with `FLASHCERT_SHARE_IMAGE=…:0.1.0`).
-Tables are created on start. Back up the `data` volume (or the PostgreSQL one).
+**5. Connect the app**: in FlashCert, **Settings → Sharing**, enter the address and the token, then
+**Save and test**. **Share** at the top of a course now creates its link.
 
-GHCR packages start private: either make `flashcert-share` public in the GitHub package settings, or
-`docker login ghcr.io` on the VPS with a token that can read packages. To use Docker Hub instead, change the
-`images:` line and the login step of the workflow (`DOCKERHUB_USERNAME` / `DOCKERHUB_TOKEN` secrets).
+### Good to know
 
-Without the registry, `docker compose build` builds the image from this folder.
+* The image is `ghcr.io/valkea/flashcert-share` (amd64 and arm64). The container restarts by itself and keeps its
+  SQLite file in the `data` volume: back that volume up (or the PostgreSQL one).
+* Upgrade: `docker compose pull && docker compose up -d`. Tables are created on start. To stay on one version, set
+  `FLASHCERT_SHARE_IMAGE=ghcr.io/valkea/flashcert-share:1.2.3` in `.env`.
+* Another port: `FLASHCERT_SHARE_PORT`. Under a path of an existing site (`example.com/courses/`) rather than its own
+  subdomain: the proxy sends `X-Forwarded-Prefix` (both deploy files show how) and `FLASHCERT_SHARE_PUBLIC_URL`
+  includes the path.
+* Building the image yourself: `docker compose build` in a clone of this repository.
+* A token can publish, change and delete every course on the server, so keep tokens to your own devices (one per
+  phone). `token list` and `token revoke ID` manage them. Visitors never need one.
+
+Images are built by GitHub Actions ([`.github/workflows/image.yml`](.github/workflows/image.yml)) after the tests
+pass: `:latest` and `:sha-…` from `main`, `:1.2.3` and `:1.2` from tags `v1.2.3`.
 
 ### Try a course before the app syncs
 
-Share a course file directly (the harness' `bundle.json` works):
+Share a course file directly (a [course document](#course-document) or a `flashcert-course-1` bundle):
 
 ```bash
 docker compose exec -T share flashcert-share import /dev/stdin --certification "Claude Agent SDK" < bundle.json
@@ -78,8 +99,8 @@ flashcert-share serve [--host] [--port] [--threads] [--proxies]   (what the cont
 
 ### PostgreSQL
 
-`compose.yaml` has an optional `db` service. SQLite is plenty for a handful of friends; switch when you want
-the data in a database server:
+`compose.yaml` has an optional `db` service. SQLite is plenty for a few dozen courses and their visitors; switch when
+you want the data in a database server:
 
 ```bash
 # .env: POSTGRES_PASSWORD=…   (leave DATABASE_URL unset for now)
@@ -159,7 +180,7 @@ kept on the course row. The server answers with the public `url`, which never ch
   right item across syncs. Items without one get an id from their text.
 * `certification`, `lang`, `position` (order inside the certification), `sheet`, `questions` and `cards` are optional.
 * Unplayable questions and cards are dropped and listed in `warnings` in the response. Transcript, analysis and
-  costs are never stored, even when sent (a harness `flashcert-course-1` bundle is accepted as is).
+  costs are never stored, even when sent (a `flashcert-course-1` bundle is accepted as is).
 
 The response is the course summary plus `created`, `changed` and `warnings`. `hash` changes only when what
 visitors see changes, so the app can compare it with a hash of its own (or simply re-send: identical content
