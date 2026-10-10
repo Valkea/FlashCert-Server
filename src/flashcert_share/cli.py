@@ -69,7 +69,7 @@ def cmd_token(cfg: Config, args) -> None:
     engine = _engine(cfg)
     if args.action == "create":
         token_id, raw = db.create_token(engine, args.label or "")
-        print(f"Token #{token_id} created. Enter it in the app (Settings → Sharing); it won't be shown again:\n")
+        print(f"Token #{token_id} created. Enter it in the app (Settings → Share and sync); it won't be shown again:\n")
         print(raw)
     elif args.action == "list":
         rows = db.list_tokens(engine)

@@ -43,7 +43,7 @@ with [`deploy/nginx.conf`](deploy/nginx.conf) or [`deploy/Caddyfile`](deploy/Cad
 certificate by itself; with nginx, run `certbot --nginx`). Then `https://courses.example.com/healthz` should answer
 `{"ok": true}`.
 
-**5. Connect the app**: in FlashCert, **Settings → Sharing**, enter the address and the token, then
+**5. Connect the app**: in FlashCert, **Settings → Share and sync**, enter the address and the token, then
 **Save and test**. The app backs up its courses there, and **Share** at the top of a course creates its link.
 
 ### Good to know
@@ -82,7 +82,7 @@ the course content (notes, revision sheet, questions, cards): recordings, transc
 progress (scores, cards known, review dates) never leave the phone. A course restored from the server starts its
 review cycle again.
 
-**Which courses.** In **Settings → Sharing**, *Back up every course* (on by default) sends every finished course,
+**Which courses.** In **Settings → Share and sync**, *Back up every course* (on by default) sends every finished course,
 *private* unless you share it. Turned off, only the courses you share go to the server.
 
 **Private, link-only or public.** A *private* course is a backup: it has no page, and its link answers "not found".
