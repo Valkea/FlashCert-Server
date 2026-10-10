@@ -3,7 +3,8 @@
     flashcert-share serve [--host 127.0.0.1] [--port 8080]
     flashcert-share token create [--label phone]     # prints the token once
     flashcert-share token list | token revoke ID
-    flashcert-share courses                          # what is shared, with links
+    flashcert-share courses                          # what is shared, with links and owners
+    flashcert-share owner TOKEN_ID UID… | --from ID | --unowned   # who may change and download courses
     flashcert-share import bundle.json [--uid X]     # share a course file without the app
     flashcert-share reports [--all]                  # errors flagged by visitors
     flashcert-share copy-db postgresql+psycopg://…   # move everything to another database
@@ -17,9 +18,9 @@ import json
 import sys
 from datetime import datetime
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 
-from . import __version__, db
+from . import __version__, db, payload
 from .config import Config
 
 
@@ -46,12 +47,21 @@ def make_server(cfg: Config, host: str, port: int, threads: int = 4):
     return app, server
 
 
+def _unowned(engine) -> int:
+    with engine.connect() as conn:
+        return conn.execute(select(func.count()).select_from(db.course).where(db.course.c.owner_id.is_(None))).scalar_one()
+
+
 def cmd_serve(cfg: Config, args) -> None:
     app, server = make_server(cfg, args.host, args.port, args.threads)
     engine = app.extensions["flashcert"]["engine"]
     print(f"flashcert-share {__version__} on http://{args.host}:{args.port}  (database: {engine.url!r})")
     if db.token_count(engine) == 0:
         print("No sync token yet: run `flashcert-share token create` and enter it in the app.")
+    unowned = _unowned(engine)
+    if unowned:
+        print(f"{unowned} course(s) have no owner yet: the next app that sends one claims it, or run "
+              "`flashcert-share owner TOKEN_ID UID…` (see `courses` and `token list`).")
     server.run()
 
 
@@ -66,11 +76,19 @@ def cmd_token(cfg: Config, args) -> None:
         if not rows:
             print("No tokens.")
         for r in rows:
-            print(f"#{r['id']:<4} {r['label'] or '-':<20} created {_when(r['created_at'])}  last used {_when(r['last_used_at'])}")
+            state = f"REVOKED {_when(r['revoked_at'])}" if r["revoked_at"] else f"last used {_when(r['last_used_at'])}"
+            print(f"#{r['id']:<4} {r['label'] or '-':<20} created {_when(r['created_at'])}  {state}  "
+                  f"{r['courses']} course(s)")
     elif args.action == "revoke":
         if args.id is None:
             sys.exit("token revoke needs a token id (see `token list`)")
-        print("Revoked." if db.revoke_token(engine, args.id) else "No such token.")
+        if not db.revoke_token(engine, args.id):
+            sys.exit("No such token, or already revoked.")
+        owned = next((r["courses"] for r in db.list_tokens(engine) if r["id"] == args.id), 0)
+        print("Revoked.")
+        if owned:
+            print(f"Its {owned} course(s) stay online. To hand them to a new token: "
+                  f"flashcert-share owner NEW_ID --from {args.id}")
 
 
 def _link(cfg: Config, share_id: str) -> str:
@@ -79,19 +97,31 @@ def _link(cfg: Config, share_id: str) -> str:
 
 def cmd_courses(cfg: Config, args) -> None:
     engine = _engine(cfg)
+    labels = {t["id"]: t["label"] or "-" for t in db.list_tokens(engine)}
     with engine.connect() as conn:
         rows = conn.execute(select(db.course).order_by(db.course.c.certification, db.course.c.title)).all()
     if not rows:
         print("No course shared yet.")
     for r in rows:
+        owner = f"#{r.owner_id} {labels.get(r.owner_id, '?')}" if r.owner_id is not None else "no owner"
         print(f"{r.visibility:<9} {_link(cfg, r.share_id):<40} {r.title}  [{r.certification or '-'}]  "
-              f"{r.question_count} q, {r.card_count} cards, updated {_when(r.updated_at)}  (uid {r.uid})")
+              f"{r.question_count} q, {r.card_count} cards, updated {_when(r.updated_at)}  ({owner}, uid {r.uid})")
+
+
+def cmd_owner(cfg: Config, args) -> None:
+    """Hands courses to a token: it alone can then change, download and delete them from the app."""
+    engine = _engine(cfg)
+    if not args.uids and args.from_id is None and not args.unowned:
+        sys.exit("Name the courses: UID…, --from TOKEN_ID or --unowned.")
+    live = {t["id"] for t in db.list_tokens(engine) if not t["revoked_at"]}
+    if args.token_id not in live:
+        sys.exit(f"No token #{args.token_id} in use (see `token list`).")
+    n = db.give_courses(engine, args.token_id, args.uids, args.from_id, args.unowned)
+    print(f"{n} course(s) now belong to token #{args.token_id}.")
 
 
 def cmd_import(cfg: Config, args) -> None:
     """Shares a course file directly, as the app would: useful to try the server before the app syncs."""
-    from .app import create_app
-
     with open(args.file, encoding="utf-8") as f:
         doc = json.load(f)
     if args.unlisted:
@@ -99,23 +129,27 @@ def cmd_import(cfg: Config, args) -> None:
     if args.certification:
         doc["certification"] = args.certification
     uid = args.uid or "import-" + hashlib.sha1((doc.get("title") or args.file).encode("utf-8")).hexdigest()[:12]
-    app = create_app(cfg)
-    engine = app.extensions["flashcert"]["engine"]
-    token_id, raw = db.create_token(engine, "import (temporary)")
     try:
-        client = app.test_client()
-        r = client.put(f"/api/v1/courses/{uid}", json=doc, headers={"Authorization": f"Bearer {raw}"},
-                       base_url=cfg.public_url or "http://localhost")
-    finally:
-        db.revoke_token(engine, token_id)
-    body = r.get_json()
-    if r.status_code >= 400:
-        sys.exit(f"Import failed: {body.get('error')}")
-    for w in body.get("warnings", []):
+        meta, content, warnings = payload.normalize(doc)
+    except payload.PayloadError as e:
+        sys.exit(f"Import failed: {e}")
+    engine = _engine(cfg)
+    if args.owner is not None and args.owner not in {t["id"] for t in db.list_tokens(engine) if not t["revoked_at"]}:
+        sys.exit(f"No token #{args.owner} in use (see `token list`).")
+    values = {**meta, "modified_at": meta["modified_at"] or db.now_ms(),
+              "content": json.dumps(content, ensure_ascii=False, separators=(",", ":")),
+              "content_hash": payload.content_hash(meta, content),
+              "question_count": len(content["questions"]), "card_count": len(content["cards"])}
+    created, changed = db.save_course(engine, uid, values, None)
+    if args.owner is not None:
+        db.give_courses(engine, args.owner, [uid])
+    for w in warnings:
         print("warning:", w)
-    state = "created" if body["created"] else ("updated" if body["changed"] else "unchanged")
-    link = body["url"] if cfg.public_url else f"/c/{body['share_id']} (set FLASHCERT_SHARE_PUBLIC_URL for full links)"
-    print(f"{state}: {body['title']}  ({body['questions']} questions, {body['cards']} cards)\n{link}")
+    with engine.connect() as conn:
+        share_id = conn.execute(select(db.course.c.share_id).where(db.course.c.uid == uid)).scalar_one()
+    state = "created" if created else ("updated" if changed else "unchanged")
+    link = _link(cfg, share_id) if cfg.public_url else f"/c/{share_id} (set FLASHCERT_SHARE_PUBLIC_URL for full links)"
+    print(f"{state}: {meta['title']}  ({len(content['questions'])} questions, {len(content['cards'])} cards)\n{link}")
 
 
 def cmd_reports(cfg: Config, args) -> None:
@@ -158,7 +192,7 @@ def cmd_copy_db(cfg: Config, args) -> None:
         if target.dialect.name == "postgresql":
             from sqlalchemy import text
 
-            for table in ("token", "course", "report"):
+            for table in ("token", "course", "report"):  # course_gone is keyed by uid
                 dst.execute(text(f"SELECT setval(pg_get_serial_sequence('{table}', 'id'), "
                                  f"COALESCE((SELECT MAX(id) FROM {table}), 0) + 1, false)"))
     print("Done. Point FLASHCERT_SHARE_DATABASE_URL at the new database and restart the server.")
@@ -187,11 +221,19 @@ def main(argv: list[str] | None = None) -> None:
     p = sub.add_parser("courses", help="list shared courses")
     p.set_defaults(func=cmd_courses)
 
+    p = sub.add_parser("owner", help="give courses to a token (the only one that can then change them)")
+    p.add_argument("token_id", type=int)
+    p.add_argument("uids", nargs="*", metavar="UID")
+    p.add_argument("--from", dest="from_id", type=int, metavar="TOKEN_ID", help="every course of that token")
+    p.add_argument("--unowned", action="store_true", help="every course without an owner")
+    p.set_defaults(func=cmd_owner)
+
     p = sub.add_parser("import", help="share a course JSON file (flashcert-share-1 or flashcert-course-1)")
     p.add_argument("file")
     p.add_argument("--uid", help="course id; importing again with the same uid replaces it")
     p.add_argument("--certification")
     p.add_argument("--unlisted", action="store_true", help="reachable by link only, not on the list")
+    p.add_argument("--owner", type=int, metavar="TOKEN_ID", help="the token whose app may then change it")
     p.set_defaults(func=cmd_import)
 
     p = sub.add_parser("reports", help="errors flagged by visitors")

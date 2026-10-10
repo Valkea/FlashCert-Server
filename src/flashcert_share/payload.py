@@ -7,8 +7,9 @@ Format "flashcert-share-1" (what the app sends)::
       "title": "Hooks and guardrails",
       "certification": "Claude Agent SDK",      # optional
       "lang": "en",                             # optional, language of the notes
-      "visibility": "public",                   # or "unlisted" (link only)
+      "visibility": "public",                   # or "unlisted" (link only) or "private" (backup, no page)
       "position": 3,                            # optional, order inside the certification
+      "modified_at": 1760000000000,             # optional, last edit on the device (ms since the epoch)
       "notes": "## Section\\n...",              # Markdown
       "sheet": {...},                           # optional revision sheet
       "questions": [{"id": "q12", "type": "mcq", "q": "...", ...}],
@@ -25,7 +26,7 @@ import json
 import re
 
 FORMATS = ("flashcert-share-1", "flashcert-course-1")
-VISIBILITIES = ("public", "unlisted")
+VISIBILITIES = ("public", "unlisted", "private")
 QUESTION_TYPES = ("mcq", "multi", "true_false", "cloze", "order")
 
 MAX_QUESTIONS = 2000
@@ -181,14 +182,16 @@ def normalize(doc) -> tuple[dict, dict, list[str]]:
 
     visibility = doc.get("visibility", "public")
     if visibility not in VISIBILITIES:
-        raise PayloadError("visibility must be public or unlisted")
+        raise PayloadError("visibility must be public, unlisted or private")
     lang = doc.get("lang") if fmt == "flashcert-share-1" else doc.get("out_lang")
+    modified = doc.get("modified_at")
     meta = {
         "title": _text(doc.get("title"), 300, "title", required=True),
         "certification": _text(doc.get("certification"), 200, "certification") or None,
         "lang": _text(lang, 16, "lang") or None,
         "visibility": visibility,
         "position": doc["position"] if type(doc.get("position")) is int else None,
+        "modified_at": modified if type(modified) is int and modified > 0 else None,
     }
 
     notes = _text(doc.get("notes"), 2_000_000, "notes", required=True, strip=False)

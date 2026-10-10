@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 from functools import wraps
 from pathlib import Path
 
-from flask import Flask, abort, jsonify, render_template, request, url_for
+from flask import Flask, abort, g, jsonify, render_template, request, url_for
 from sqlalchemy import func, select
 from sqlalchemy.engine import Engine
 from werkzeug.exceptions import HTTPException
@@ -22,6 +22,7 @@ UID = re.compile(r"^[A-Za-z0-9._:-]{1,100}$")
 SHARE_ID = re.compile(r"^[A-Za-z0-9]{6,16}$")
 REPORT_KINDS = ("question", "card", "section", "sheet", "course")
 REPORT_STATUSES = ("open", "resolved", "dismissed")
+GONE_REASONS = ("removed", "deleted")
 UI_LANGS = ("en", "fr")
 
 CSP = ("default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self'; "
@@ -79,14 +80,17 @@ def create_app(config: Config | None = None, engine: Engine | None = None) -> Fl
         return data
 
     def require_token(view):
+        """The token's id goes to g.token_id: sync calls only see and touch that token's courses."""
         @wraps(view)
         def wrapper(*args, **kwargs):
             header = request.headers.get("Authorization", "")
             raw = header[7:].strip() if header[:7].lower() == "bearer " else ""
-            if not db.check_token(engine, raw):
+            token_id = db.check_token(engine, raw)
+            if token_id is None:
                 response = api_error(401, "missing or invalid token")
                 response.headers["WWW-Authenticate"] = 'Bearer realm="flashcert-share"'
                 return response
+            g.token_id = token_id
             return view(*args, **kwargs)
 
         return wrapper
@@ -98,11 +102,22 @@ def create_app(config: Config | None = None, engine: Engine | None = None) -> Fl
         with engine.connect() as conn:
             return conn.execute(stmt).first()
 
+    def my_course(uid: str):
+        """The course if this token owns it. Other people's courses answer 404, like missing ones."""
+        row = course_row(uid=uid)
+        return row if row is not None and row.owner_id == g.token_id else None
+
+    def visible_course(share_id: str):
+        """The course behind a public link; private courses (backups) have no page."""
+        row = course_row(share_id=share_id) if SHARE_ID.match(share_id) else None
+        return row if row is not None and row.visibility != "private" else None
+
     def open_reports_by_course() -> dict[int, int]:
         with engine.connect() as conn:
             rows = conn.execute(
                 select(db.report.c.course_id, func.count())
-                .where(db.report.c.status == "open")
+                .join(db.course, db.course.c.id == db.report.c.course_id)
+                .where(db.report.c.status == "open", db.course.c.owner_id == g.token_id)
                 .group_by(db.report.c.course_id)
             )
             return {course_id: n for course_id, n in rows}
@@ -122,6 +137,7 @@ def create_app(config: Config | None = None, engine: Engine | None = None) -> Fl
             "cards": row.card_count,
             "created_at": iso(row.created_at),
             "updated_at": iso(row.updated_at),
+            "modified_at": iso(row.modified_at or row.updated_at),
         }
         if open_reports is not None:
             out["open_reports"] = open_reports
@@ -205,7 +221,7 @@ def create_app(config: Config | None = None, engine: Engine | None = None) -> Fl
     @app.get("/c/<share_id>")
     @app.get("/c/<share_id>/<path:_slug>")
     def course_page(share_id: str, _slug: str = ""):
-        row = course_row(share_id=share_id) if SHARE_ID.match(share_id) else None
+        row = visible_course(share_id)
         if row is None:
             abort(404)
         content = json.loads(row.content)
@@ -244,14 +260,14 @@ def create_app(config: Config | None = None, engine: Engine | None = None) -> Fl
 
     @app.get("/api/public/courses/<share_id>")
     def api_public_course(share_id: str):
-        row = course_row(share_id=share_id) if SHARE_ID.match(share_id) else None
+        row = visible_course(share_id)
         if row is None:
             return api_error(404, "no such course")
         return public_course(row)
 
     @app.post("/api/public/courses/<share_id>/reports")
     def api_report(share_id: str):
-        row = course_row(share_id=share_id) if SHARE_ID.match(share_id) else None
+        row = visible_course(share_id)
         if row is None:
             return api_error(404, "no such course")
         body = json_body()
@@ -287,19 +303,24 @@ def create_app(config: Config | None = None, engine: Engine | None = None) -> Fl
     @require_token
     def api_status():
         with engine.connect() as conn:
-            courses = conn.execute(select(func.count()).select_from(db.course)).scalar_one()
-            reports = conn.execute(select(func.count()).select_from(db.report)
-                                   .where(db.report.c.status == "open")).scalar_one()
+            courses = conn.execute(select(func.count()).select_from(db.course)
+                                   .where(db.course.c.owner_id == g.token_id)).scalar_one()
+            label = conn.execute(select(db.token.c.label).where(db.token.c.id == g.token_id)).scalar_one()
+        reports = sum(open_reports_by_course().values())
         return {"ok": True, "version": __version__, "courses": courses, "open_reports": reports,
-                "base_url": base_url()}
+                "base_url": base_url(), "token": label}
 
     @app.get("/api/v1/courses")
     @require_token
     def api_courses():
         counts = open_reports_by_course()
         with engine.connect() as conn:
-            rows = conn.execute(select(db.course).order_by(db.course.c.id)).all()
-        return {"courses": [course_summary(r, counts.get(r.id, 0)) for r in rows]}
+            rows = conn.execute(select(db.course).where(db.course.c.owner_id == g.token_id)
+                                .order_by(db.course.c.id)).all()
+            gone = conn.execute(select(db.course_gone).where(db.course_gone.c.owner_id == g.token_id)
+                                .order_by(db.course_gone.c.deleted_at)).all()
+        return {"courses": [course_summary(r, counts.get(r.id, 0)) for r in rows],
+                "gone": [{"uid": r.uid, "reason": r.reason, "deleted_at": iso(r.deleted_at)} for r in gone]}
 
     @app.put("/api/v1/courses/<uid>")
     @require_token
@@ -310,41 +331,27 @@ def create_app(config: Config | None = None, engine: Engine | None = None) -> Fl
             meta, content, warnings = payload.normalize(json_body())
         except payload.PayloadError as e:
             return api_error(422, str(e))
-        digest = payload.content_hash(meta, content)
         now = db.now_ms()
         values = {
             **meta,
+            # A device whose clock runs ahead would otherwise win every conflict.
+            "modified_at": min(meta["modified_at"] or now, now),
             "content": json.dumps(content, ensure_ascii=False, separators=(",", ":")),
-            "content_hash": digest,
+            "content_hash": payload.content_hash(meta, content),
             "question_count": len(content["questions"]),
             "card_count": len(content["cards"]),
         }
-        with engine.begin() as conn:
-            existing = conn.execute(select(db.course.c.id, db.course.c.content_hash, db.course.c.visibility)
-                                    .where(db.course.c.uid == uid)).first()
-            if existing is None:
-                share_id = db.new_share_id()
-                while conn.execute(select(db.course.c.id).where(db.course.c.share_id == share_id)).first():
-                    share_id = db.new_share_id()
-                conn.execute(db.course.insert().values(uid=uid, share_id=share_id, created_at=now, updated_at=now,
-                                                       **values))
-                created, changed = True, True
-            else:
-                created, changed = False, existing.content_hash != digest
-                if changed:
-                    conn.execute(db.course.update().where(db.course.c.id == existing.id)
-                                 .values(updated_at=now, **values))
-                elif existing.visibility != meta["visibility"]:
-                    conn.execute(db.course.update().where(db.course.c.id == existing.id)
-                                 .values(visibility=meta["visibility"]))
-        row = course_row(uid=uid)
-        body = {**course_summary(row), "created": created, "changed": changed, "warnings": warnings}
+        try:
+            created, changed = db.save_course(engine, uid, values, g.token_id)
+        except db.NotYours:
+            return api_error(403, "this course belongs to another token")
+        body = {**course_summary(course_row(uid=uid)), "created": created, "changed": changed, "warnings": warnings}
         return body, 201 if created else 200
 
     @app.get("/api/v1/courses/<uid>")
     @require_token
     def api_get_course(uid: str):
-        row = course_row(uid=uid)
+        row = my_course(uid)
         if row is None:
             return api_error(404, "no such course")
         return {**course_summary(row), "content": json.loads(row.content)}
@@ -355,31 +362,37 @@ def create_app(config: Config | None = None, engine: Engine | None = None) -> Fl
         body = json_body()
         visibility = body.get("visibility")
         if visibility not in payload.VISIBILITIES:
-            return api_error(400, "visibility must be public or unlisted")
-        with engine.begin() as conn:
-            done = conn.execute(db.course.update().where(db.course.c.uid == uid)
-                                .values(visibility=visibility)).rowcount
-        if not done:
+            return api_error(400, "visibility must be public, unlisted or private")
+        if my_course(uid) is None:
             return api_error(404, "no such course")
+        with engine.begin() as conn:
+            conn.execute(db.course.update().where(db.course.c.uid == uid).values(visibility=visibility))
         return course_summary(course_row(uid=uid))
 
     @app.delete("/api/v1/courses/<uid>")
     @require_token
     def api_delete_course(uid: str):
-        with engine.begin() as conn:
-            row = conn.execute(select(db.course.c.id).where(db.course.c.uid == uid)).first()
-            if row is None:
-                return api_error(404, "no such course")
-            # Explicit, so it also holds where the database ignores ON DELETE CASCADE.
-            conn.execute(db.report.delete().where(db.report.c.course_id == row.id))
-            conn.execute(db.course.delete().where(db.course.c.id == row.id))
+        reason = request.args.get("reason", "removed")
+        if reason not in GONE_REASONS:
+            return api_error(400, "reason must be removed or deleted")
+        row = my_course(uid)
+        if row is None:
+            return api_error(404, "no such course")
+        db.delete_course(engine, row.id, uid, g.token_id, reason)
         return "", 204
+
+    def my_report(report_id: int):
+        with engine.connect() as conn:
+            return conn.execute(select(db.report, db.course.c.uid)
+                                .join(db.course, db.course.c.id == db.report.c.course_id)
+                                .where(db.report.c.id == report_id, db.course.c.owner_id == g.token_id)).first()
 
     @app.get("/api/v1/reports")
     @require_token
     def api_reports():
         stmt = (select(db.report, db.course.c.uid)
                 .join(db.course, db.course.c.id == db.report.c.course_id)
+                .where(db.course.c.owner_id == g.token_id)
                 .order_by(db.report.c.id))
         status = request.args.get("status", "open")
         if status != "all":
@@ -401,22 +414,21 @@ def create_app(config: Config | None = None, engine: Engine | None = None) -> Fl
         status = json_body().get("status")
         if status not in REPORT_STATUSES:
             return api_error(400, "status must be open, resolved or dismissed")
-        with engine.begin() as conn:
-            done = conn.execute(db.report.update().where(db.report.c.id == report_id)
-                                .values(status=status, updated_at=db.now_ms())).rowcount
-            row = conn.execute(select(db.report, db.course.c.uid)
-                               .join(db.course, db.course.c.id == db.report.c.course_id)
-                               .where(db.report.c.id == report_id)).first()
-        if not done or row is None:
+        if my_report(report_id) is None:
             return api_error(404, "no such report")
+        with engine.begin() as conn:
+            conn.execute(db.report.update().where(db.report.c.id == report_id)
+                         .values(status=status, updated_at=db.now_ms()))
+        row = my_report(report_id)
         return report_out(row, row.uid)
 
     @app.delete("/api/v1/reports/<int:report_id>")
     @require_token
     def api_delete_report(report_id: int):
+        if my_report(report_id) is None:
+            return api_error(404, "no such report")
         with engine.begin() as conn:
-            if not conn.execute(db.report.delete().where(db.report.c.id == report_id)).rowcount:
-                return api_error(404, "no such report")
+            conn.execute(db.report.delete().where(db.report.c.id == report_id))
         return "", 204
 
     return app

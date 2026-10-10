@@ -105,7 +105,7 @@ def test_older_single_source_becomes_a_list(client, auth, course):
 def test_rejects_bad_documents(client, auth, course):
     assert put(client, auth, {"format": "other"}).status_code == 422
     assert put(client, auth, {**course, "title": ""}).status_code == 422
-    assert put(client, auth, {**course, "visibility": "private"}).status_code == 422
+    assert put(client, auth, {**course, "visibility": "secret"}).status_code == 422
     assert put(client, auth, course, uid="bad uid!").status_code in (400, 404)
     assert client.put("/api/v1/courses/x", data="not json", headers={**auth, "Content-Type": "application/json"}).status_code == 400
 
