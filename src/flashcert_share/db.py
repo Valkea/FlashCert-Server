@@ -317,10 +317,12 @@ def save_course(engine: Engine, uid: str, values: dict, owner_id: int | None, *,
             _expected(existing, expected)
             if changed:
                 from .changes import summarize
+                from .payload import confirmation_hash
                 impact = summarize(json.loads(existing.content), json.loads(values["content"]), notes_limit, items_limit)
-                if impact["large"] and confirmation != values["content_hash"]:
+                approval = confirmation_hash(values, json.loads(values["content"]))
+                if impact["large"] and confirmation != approval:
                     raise SyncConflict("confirmation_required", existing.revision, changes=impact,
-                                       confirmation=values["content_hash"])
+                                       confirmation=approval)
         update: dict = {}
         if changed:
             update = {**values, "updated_at": now}

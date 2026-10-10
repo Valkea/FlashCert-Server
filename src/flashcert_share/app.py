@@ -403,7 +403,7 @@ def create_app(config: Config | None = None, engine: Engine | None = None) -> Fl
         except payload.PayloadError as e:
             return api_error(422, str(e))
         impact = changes.summarize(json.loads(row.content), content, cfg.notes_change_percent, cfg.items_change_percent)
-        return {"revision": row.revision, "changes": impact, "confirmation": payload.content_hash(meta, content),
+        return {"revision": row.revision, "changes": impact, "confirmation": payload.confirmation_hash(meta, content),
                 "warnings": warnings}
 
     @app.get("/api/v1/trash")

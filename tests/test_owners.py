@@ -106,7 +106,7 @@ def test_course_without_owner_is_claimed_by_the_first_token_that_sends_it(client
     assert client.get("/api/v1/courses/legacy", headers=auth).status_code == 404
 
     meta, content, _ = payload.normalize(course)
-    r = put(client, auth, {**course, "expected_revision": 1, "confirmation": payload.content_hash(meta, content)}, uid="legacy")
+    r = put(client, auth, {**course, "expected_revision": 1, "confirmation": payload.confirmation_hash(meta, content)}, uid="legacy")
     assert r.status_code == 200 and not r.get_json()["created"]
     assert [c["uid"] for c in client.get("/api/v1/courses", headers=auth).get_json()["courses"]] == ["legacy"]
     _, other = token(engine)

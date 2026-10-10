@@ -237,6 +237,11 @@ def content_hash(meta: dict, content: dict) -> str:
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
+def confirmation_hash(meta: dict, content: dict) -> str:
+    """A reviewed replacement also approves its visibility, which the ordinary content hash excludes."""
+    return hashlib.sha256((content_hash(meta, content) + "\0" + meta["visibility"]).encode("utf-8")).hexdigest()
+
+
 # --- Elements that visitors can flag -------------------------------------------------------------
 
 _HEADING = re.compile(r"^(#{2,3})\s+(.+?)\s*#*\s*$")

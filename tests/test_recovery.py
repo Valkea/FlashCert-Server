@@ -30,6 +30,7 @@ def test_major_change_approval_is_bound_to_exact_content_and_revision(client, au
     assert client.put("/api/v1/courses/safe", json=replacement, headers=auth).status_code == 409
     approved = {**replacement, "confirmation": preview["confirmation"]}
     assert client.put("/api/v1/courses/safe", json={**approved, "title": "Different"}, headers=auth).status_code == 409
+    assert client.put("/api/v1/courses/safe", json={**approved, "visibility": "unlisted"}, headers=auth).status_code == 409
     assert client.put("/api/v1/courses/safe", json=approved, headers=auth).status_code == 200
     assert client.put("/api/v1/courses/safe", json={**course, **approved, "notes": "Another replacement"}, headers=auth).status_code == 409
     old = client.get("/api/v1/courses/safe/history/1", headers=auth).get_json()
@@ -85,3 +86,17 @@ def test_same_size_rewrite_and_item_replacement_are_detected():
     impact = summarize(before, after)
     assert impact["large"] and impact["notes_changed_percent"] == 100
     assert impact["questions"]["edited"] == 1
+
+
+def test_concurrent_devices_cannot_both_write_the_same_base_revision(app, auth, course):
+    from concurrent.futures import ThreadPoolExecutor
+    create(app.test_client(), auth, course)
+    def update(title):
+        with app.test_client() as client:
+            return client.put("/api/v1/courses/safe", json={**course, "title": title,
+                              "expected_revision": 1}, headers=auth).status_code
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        outcomes = list(pool.map(update, ["Phone", "Tablet"]))
+    assert sorted(outcomes) == [200, 409]
+    history = app.test_client().get("/api/v1/courses/safe/history", headers=auth).get_json()["history"]
+    assert len(history) == 2
