@@ -73,10 +73,11 @@ that token's app, which then downloads it at its next sync.
 
 ## How sharing works
 
-**Both ways, and the newest wins.** The app sends its courses and gets back their link, their visibility and the
+**Both ways, with recoverable changes.** The app sends its courses and gets back their link, their visibility and the
 errors visitors report. It also downloads them: a course changed on another device comes back, and a course the
 phone doesn't have yet (a new phone, a reinstall, a tablet with the same token) is added to it. When both sides
-changed a course since they last synced, the most recent edit wins, the whole course at once. The server keeps only
+changed a course since they last synced, the app asks which copy to keep. Safe automatic sync also queues deletions
+and large replacements for review; every accepted content change has a recoverable revision. The server keeps only
 the course content (notes, revision sheet, questions, cards): recordings, transcript, analysis, costs and study
 progress (scores, cards known, review dates) never leave the phone. A course restored from the server starts its
 review cycle again.
@@ -91,8 +92,9 @@ courses aren't secret: anyone who has the link can open them. Links are long ran
 unlisted course by guessing.
 
 **Stop sharing** makes a backed-up course private again. When the app doesn't back up every course, it removes the
-course from the server instead, and its link stops working. **Deleting a course** in the app deletes it from the
-server too, and from the other devices that sync it, unless one of them changed it after the deletion.
+course from the server instead, and its link stops working. **Remove from this device** moves a course to local
+trash without deleting its server copy. **Delete everywhere** queues a server deletion for review; other devices
+also review it before moving their copies into local trash. Server deletions keep content and reports for recovery.
 
 **Several people on one server.** Give each person their own token, labelled with their name:
 
@@ -110,7 +112,7 @@ last use and number of courses. `token revoke ID` stops one token from syncing w
 courses stay online, and `owner NEW_ID --from ID` hands them to another token (a replacement phone, for instance).
 
 Courses sent before owners existed (version 0.1) belong to the server's only token if there is just one. Otherwise
-the first token that sends one again claims it, which the app does by itself at its next sync. `courses` shows each
+an identical resend can claim one. Assign courses explicitly before changing their content: `courses` shows each
 course's owner, and `owner TOKEN_ID UID…` sets it by hand.
 
 ## Your data
@@ -150,8 +152,8 @@ docker compose restart share
 ```
 
 The second command fails without touching anything if `restore.db` isn't there. Courses keep the links they had in
-the backup. At their next sync, apps send again what the backup lacks: a course that isn't in it comes back with a
-new link, and a course changed on the phone after the backup replaces its older copy (the phone's edit is newer).
+the backup. At their next sync, apps review missing courses or a server revision older than their accepted baseline.
+A newer phone copy is retained until the person chooses how to reconcile it; device clocks don't pick a winner.
 
 With PostgreSQL ([below](#postgresql)) the data is in the `pgdata` volume instead:
 `docker compose exec db pg_dump -U flashcert flashcert > flashcert-share.sql`.
@@ -229,7 +231,7 @@ must send `expected_revision`; missing revisions answer 428 and stale revisions 
 at revision 1 (`expected_revision: 0` when creating). Identical re-sends don't make another revision.
 
 Large replacements answer 409 with `code: confirmation_required`, a `changes` summary and a `confirmation`
-value bound to the proposed normalized content. `POST /api/v1/courses/{uid}/preview` takes the proposed document
+value bound to the proposed normalized content and visibility. `POST /api/v1/courses/{uid}/preview` takes the proposed document
 and its expected revision and returns that summary before writing. After review, re-send the exact document
 with its `confirmation`. Editing the document or advancing the server revision invalidates the approval.
 
@@ -240,37 +242,41 @@ their originating `X-FlashCert-Device`; `GET .../history/{revision}` previews a 
 `POST .../restore` takes `{revision: V, expected_revision: R, confirmation: "restore-R-V"}` and makes a new
 current revision with `event: restored`, preserving the uid and share link. Devices must clear superseded
 deletion markers when processing that restore; they must not delete a restored course again automatically.
+To restore privately before re-sharing, include `visibility: "private"` and use confirmation `restore-R-V-private`;
+then upload the separately reviewed current document. This avoids briefly republishing an older public snapshot.
 
 Defaults: the last 20 revisions, trash retained 30 days, review at 30% rewritten notes or 20% removed/edited
 questions or cards. Clearing an existing sheet also needs review. Settings are `FLASHCERT_SHARE_HISTORY_LIMIT`,
 `FLASHCERT_SHARE_TRASH_DAYS`, `FLASHCERT_SHARE_NOTES_CHANGE_PERCENT` and `FLASHCERT_SHARE_ITEMS_CHANGE_PERCENT`.
 Expired trash and excess live history are pruned on startup and writes; deletion tombstones remain to prevent
 silent resurrection by an old device. `/status` advertises `safe_sync: 1` and the configured thresholds.
-Old clients can read and create courses but cannot silently change or delete existing content.
+Clients negotiate `X-FlashCert-Sync-Version: 1`. Older clients can read summaries and create new courses, but
+cannot silently change existing content, download replacements or receive deletion instructions that would
+hard-delete local recordings. They must upgrade before participating in two-way sync.
 
 Every `/api/v1` call takes `Authorization: Bearer <token>` and only sees that token's courses and their reports:
 other people's courses answer 404 (403 when sending one). JSON in, JSON out; errors are `{"error": "…"}` with
-400, 401, 403, 404, 413 (too large), 422 (course rejected) or 429.
+400, 401, 403, 404, 409 (review/conflict), 413 (too large), 422 (course rejected), 428 (revision required) or 429.
 
 | | |
 |---|---|
-| `GET /api/v1/status` | `{ok, version, courses, open_reports, base_url, token}` for this token (`token`: its label); use it for "Test connection" |
-| `GET /api/v1/courses` | `{courses, gone}`. `courses`: this token's courses, `{uid, share_id, url, title, certification, lang, position, visibility, hash, questions, cards, created_at, updated_at, modified_at, open_reports}`. `gone`: the ones it deleted, `{uid, reason, deleted_at}`, `reason` being `deleted` or `removed` |
-| `PUT /api/v1/courses/{uid}` | create or replace a course (body below). 201 when created, 200 otherwise. A course without an owner is claimed; a deleted one comes back with a new link. |
+| `GET /api/v1/status` | this token's connection status and counts, plus `safe_sync`, `token_id`, retention and review thresholds |
+| `GET /api/v1/courses` | `{courses, gone}` for safe clients. Each course includes content metadata, `hash`, `revision`, `event` and report counts. `gone`: `{uid, reason, deleted_at, revision}`, with reason `deleted` or `removed`. Legacy clients receive summaries without `gone`. |
+| `PUT /api/v1/courses/{uid}` | create or replace a course (body below). 201 when created, 200 otherwise. Existing changes require `expected_revision`; deleted courses require explicit restore. |
 | `GET /api/v1/courses/{uid}` | the summary plus `content` as stored: what the app downloads |
-| `PATCH /api/v1/courses/{uid}` | `{"visibility": "public" \| "unlisted" \| "private"}` without resending the course |
-| `DELETE /api/v1/courses/{uid}?reason=removed\|deleted` | the course and its reports are deleted and the link stops working; the uid goes to `gone` with the reason (default `removed`: taken off the server; `deleted`: deleted on the device, so the other devices delete it too) |
+| `PATCH /api/v1/courses/{uid}` | `{visibility, expected_revision}` without resending the course |
+| `DELETE /api/v1/courses/{uid}?reason=removed\|deleted&expected_revision=R&confirmation=delete-R-REASON` | hide the course and retain its content/reports in trash; `gone` includes the deletion revision. `removed` leaves other devices' copies local; `deleted` queues a reviewed local deletion. |
 | `GET /api/v1/reports?status=open\|resolved\|dismissed\|all&course={uid}&since_id={n}` | reports, oldest first: `{id, course_uid, element: {kind, id}, excerpt, message, author, status, created_at, updated_at}` |
 | `PATCH /api/v1/reports/{id}` | `{"status": "resolved" \| "dismissed" \| "open"}` |
 | `DELETE /api/v1/reports/{id}` | |
 
 `uid` is the app's own stable id for the course (1–100 characters among `A-Z a-z 0-9 . _ : -`), e.g. a UUID
 kept on the course row. The server answers with the public `url`, which never changes while the course is on the
-server (a private course has one too; it works once the course is shared).
+server, including retained trash (a private course has one too; it works once the course is shared).
 
 `updated_at` is when the server last stored new content; `modified_at` is when that content was edited on the
-device that sent it (taken from the document, never later than the server's clock). The app compares
-`modified_at` with its own edit time to decide which side wins.
+device that sent it (taken from the document, never later than the server's clock). It is informational;
+revision numbers and the last accepted baseline drive conflict detection.
 
 ### Course document
 
@@ -283,6 +289,7 @@ device that sent it (taken from the document, never later than the server's cloc
   "visibility": "public",
   "position": 3,
   "modified_at": 1760000000000,
+  "expected_revision": 0,
   "notes": "## Section\n\n### Subsection\n...",
   "sheet": { "essentiel": [], "definitions": [], "structure": [], "pieges": [] },
   "questions": [
@@ -310,9 +317,10 @@ visitors see changes, so the app can compare it with a hash of its own (or simpl
 leaves `updated_at` alone).
 
 App flow: a **Sharing** section in Settings holds the server URL and token (with "Test connection" via `/status`).
-Each sync deletes what the phone deleted, then compares every course with `GET /api/v1/courses`: by `hash` (what
-it last saw) and its own fingerprint it knows which side changed, sends with `PUT`, downloads with `GET` (by
-`modified_at` when both changed), deletes or unlinks what is in `gone`, and downloads courses it doesn't have.
+Each sync first plans changes using `GET /api/v1/courses`, the last accepted `hash`/`revision` and its local
+fingerprint. Safe automatic mode applies small unambiguous updates with guarded writes and local snapshots;
+conflicts, large changes and deletion events wait for explicit review. Review-everything stages all changes;
+paused mode applies none. A stale preview must be refreshed, including when a server backup rewinds revisions.
 **Share** on a course sends `PUT` and opens the system share sheet with the returned `url`. Reports come from
 `GET /api/v1/reports?since_id=<last seen>`.
 

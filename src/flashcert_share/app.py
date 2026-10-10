@@ -348,9 +348,13 @@ def create_app(config: Config | None = None, engine: Engine | None = None) -> Fl
                                 .order_by(db.course.c.id)).all()
             gone = conn.execute(select(db.course_gone).where(db.course_gone.c.owner_id == g.token_id)
                                 .order_by(db.course_gone.c.deleted_at)).all()
-        return {"courses": [course_summary(r, counts.get(r.id, 0)) for r in rows],
-                "gone": [{"uid": r.uid, "reason": r.reason, "deleted_at": iso(r.deleted_at),
-                          "revision": r.revision} for r in gone]}
+        result = {"courses": [course_summary(r, counts.get(r.id, 0)) for r in rows]}
+        # 0.2 clients hard-delete local recordings when they see a tombstone. Only negotiated safe clients
+        # receive deletion instructions; the missing key makes older apps fall back to their one-way flow.
+        if request.headers.get("X-FlashCert-Sync-Version") == "1":
+            result["gone"] = [{"uid": r.uid, "reason": r.reason, "deleted_at": iso(r.deleted_at),
+                               "revision": r.revision} for r in gone]
+        return result
 
     @app.put("/api/v1/courses/<uid>")
     @require_token
@@ -365,7 +369,7 @@ def create_app(config: Config | None = None, engine: Engine | None = None) -> Fl
         now = db.now_ms()
         values = {
             **meta,
-            # A device whose clock runs ahead would otherwise win every conflict.
+            # Keep edit timestamps plausible; revisions decide conflicts.
             "modified_at": min(meta["modified_at"] or now, now),
             "content": json.dumps(content, ensure_ascii=False, separators=(",", ":")),
             "content_hash": payload.content_hash(meta, content),
@@ -388,6 +392,9 @@ def create_app(config: Config | None = None, engine: Engine | None = None) -> Fl
         row = my_course(uid)
         if row is None:
             return api_error(404, "no such course")
+        if request.headers.get("X-FlashCert-Sync-Version") != "1":
+            return api_error(428, "upgrade the client to recoverable sync before downloading course replacements",
+                             code="client_upgrade_required")
         return {**course_summary(row), "content": json.loads(row.content)}
 
     @app.post("/api/v1/courses/<uid>/preview")
@@ -458,7 +465,10 @@ def create_app(config: Config | None = None, engine: Engine | None = None) -> Fl
         revision = body.get("revision")
         if type(revision) is not int or revision < 1:
             return api_error(400, "revision must be a positive integer")
-        db.restore_course(engine, uid, g.token_id, revision, expected(body), body.get("confirmation"), device())
+        visibility = body.get("visibility")
+        if visibility is not None and visibility not in payload.VISIBILITIES:
+            return api_error(400, "invalid restore visibility")
+        db.restore_course(engine, uid, g.token_id, revision, expected(body), body.get("confirmation"), device(), visibility)
         db.prune(engine, cfg.history_limit, cfg.trash_days)
         return course_summary(my_course(uid))
 

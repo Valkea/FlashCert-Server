@@ -100,3 +100,22 @@ def test_concurrent_devices_cannot_both_write_the_same_base_revision(app, auth, 
     assert sorted(outcomes) == [200, 409]
     history = app.test_client().get("/api/v1/courses/safe/history", headers=auth).get_json()["history"]
     assert len(history) == 2
+
+
+def test_restoring_for_resharing_can_keep_old_content_private(client, auth, course):
+    original = create(client, auth, course)
+    client.delete("/api/v1/courses/safe?expected_revision=1&confirmation=delete-1-removed", headers=auth)
+    body = {"revision": 2, "expected_revision": 2, "visibility": "private", "confirmation": "restore-2-2-private"}
+    restored = client.post("/api/v1/courses/safe/restore", json=body, headers=auth).get_json()
+    assert restored["visibility"] == "private" and restored["share_id"] == original["share_id"]
+    assert client.get(f"/c/{original['share_id']}").status_code == 404
+
+
+def test_legacy_clients_never_receive_destructive_download_or_deletion_instructions(client, auth, course):
+    create(client, auth, course)
+    legacy = {"Authorization": auth["Authorization"]}
+    assert "gone" not in client.get("/api/v1/courses", headers=legacy).get_json()
+    assert client.get("/api/v1/courses/safe", headers=legacy).status_code == 428
+    client.delete("/api/v1/courses/safe?expected_revision=1&confirmation=delete-1-removed", headers=auth)
+    assert client.get("/api/v1/courses", headers=legacy).get_json() == {"courses": []}
+    assert len(client.get("/api/v1/courses", headers=auth).get_json()["gone"]) == 1

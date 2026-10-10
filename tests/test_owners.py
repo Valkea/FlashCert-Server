@@ -11,7 +11,7 @@ from flashcert_share.config import Config
 
 def token(engine, label="other"):
     token_id, raw = db.create_token(engine, label)
-    return token_id, {"Authorization": f"Bearer {raw}"}
+    return token_id, {"Authorization": f"Bearer {raw}", "X-FlashCert-Sync-Version": "1"}
 
 
 def put(client, headers, course, uid="course-1"):

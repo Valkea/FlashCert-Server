@@ -77,8 +77,7 @@ course = Table(
     Column("created_at", BigInteger, nullable=False),
     #: Last time the content changed (a re-sync of identical content leaves it alone).
     Column("updated_at", BigInteger, nullable=False),
-    #: When the content was last edited on the device that sent it: the newer side wins when two devices both
-    #: changed a course since they last synced.
+    #: Informational device edit time; monotonic revisions, not device clocks, guard concurrent changes.
     Column("modified_at", BigInteger),
     Column("revision", BigInteger, nullable=False, default=1),
     Column("deleted_at", BigInteger),
@@ -274,7 +273,8 @@ def _expected(row, expected: int | None) -> None:
 
 
 def _update(conn, row, values: dict, action: str, device: str) -> None:
-    done = conn.execute(course.update().where(course.c.id == row.id, course.c.revision == row.revision)
+    owner = course.c.owner_id.is_(None) if row.owner_id is None else course.c.owner_id == row.owner_id
+    done = conn.execute(course.update().where(course.c.id == row.id, course.c.revision == row.revision, owner)
                         .values(**values, revision=row.revision + 1, event=action)).rowcount
     if done != 1:
         raise SyncConflict("revision_conflict", row.revision)
@@ -287,8 +287,8 @@ def save_course(engine: Engine, uid: str, values: dict, owner_id: int | None, *,
     """Creates or replaces course ``uid``; returns (created, changed).
 
     ``values`` are the columns taken from the document: the meta, content, content_hash, counts and modified_at.
-    A token (``owner_id``) can only send its own courses, claims one without an owner, and brings back one it
-    deleted (with a new link). ``owner_id`` None is the command line: no check, the owner stays as it is.
+    A token can only send its own courses and claims one without an owner. Deleted courses require explicit
+    restore. ``owner_id`` None is an explicit command-line import; it retains the existing owner and history.
     """
     now = now_ms()
     with engine.begin() as conn:
@@ -337,7 +337,7 @@ def save_course(engine: Engine, uid: str, values: dict, owner_id: int | None, *,
 
 def delete_course(engine: Engine, course_id: int, uid: str, owner_id: int | None, reason: str, *,
                   expected: int | None = None, confirmation: str | None = None, device: str = "") -> None:
-    """Deletes the course and its reports, and remembers it for the owner's other devices."""
+    """Hides the course, retains content/reports, and emits a revision-bound deletion for safe devices."""
     with engine.begin() as conn:
         row = conn.execute(select(course).where(course.c.id == course_id).with_for_update()).one()
         if row.owner_id != owner_id:
@@ -357,14 +357,15 @@ def delete_course(engine: Engine, course_id: int, uid: str, owner_id: int | None
 
 
 def restore_course(engine: Engine, uid: str, owner_id: int, revision: int, expected: int,
-                   confirmation: str, device: str = "") -> None:
+                   confirmation: str, device: str = "", visibility: str | None = None) -> None:
     with engine.begin() as conn:
         row = conn.execute(select(course).where(course.c.uid == uid).with_for_update()).first()
         if row is None or row.owner_id != owner_id:
             raise NotYours(uid)
         _expected(row, expected)
-        if confirmation != f"restore-{expected}-{revision}":
-            raise SyncConflict("confirmation_required", row.revision, confirmation=f"restore-{expected}-{revision}")
+        approval = f"restore-{expected}-{revision}" + (f"-{visibility}" if visibility is not None else "")
+        if confirmation != approval:
+            raise SyncConflict("confirmation_required", row.revision, confirmation=approval)
         snapshot = conn.execute(select(course_revision.c.snapshot)
                                 .where(course_revision.c.course_id == row.id,
                                        course_revision.c.revision == revision)).scalar_one_or_none()
@@ -374,6 +375,8 @@ def restore_course(engine: Engine, uid: str, owner_id: int, revision: int, expec
         values = {k: saved[k] for k in ("title", "certification", "lang", "position", "visibility", "content",
                                       "content_hash", "question_count", "card_count")}
         values.update(deleted_at=None, updated_at=now_ms(), modified_at=now_ms())
+        if visibility is not None:
+            values["visibility"] = visibility
         _update(conn, row, values, "restored", device)
         conn.execute(course_gone.delete().where(course_gone.c.uid == uid))
 

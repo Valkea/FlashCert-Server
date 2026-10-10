@@ -99,4 +99,4 @@ def client(app):
 @pytest.fixture
 def auth(engine):
     _, raw = db.create_token(engine, "test")
-    return {"Authorization": f"Bearer {raw}"}
+    return {"Authorization": f"Bearer {raw}", "X-FlashCert-Sync-Version": "1"}
