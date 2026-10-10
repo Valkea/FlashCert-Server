@@ -1,9 +1,10 @@
 # flashcert-share
 
-A small server that publishes FlashCert courses as read-only web pages. The FlashCert app syncs a course
-(notes, revision sheet, question bank, flashcards) with a token; the course gets its own link, and anyone with
-the link can read it, take the quizzes and study the flashcards. Visitors have no account and can't generate
-anything. They can flag an error on any element, and the app collects those reports.
+A small server that publishes FlashCert courses as read-only web pages, and keeps a copy of them for the app.
+The FlashCert app syncs its courses (notes, revision sheet, question bank, flashcards) with a token, both ways:
+the server is a backup of the phone and carries courses between devices. A shared course gets its own link, and
+anyone with the link can read it, take the quizzes and study the flashcards. Visitors have no account and can't
+generate anything. They can flag an error on any element, and the app collects those reports.
 
 * `/` lists the **public** courses, grouped by certification.
 * `/c/<id>` is one course: **Notes**, **Revision**, **Quiz**, **Cards**. Every answer and card opens the passage of
@@ -43,7 +44,7 @@ certificate by itself; with nginx, run `certbot --nginx`). Then `https://courses
 `{"ok": true}`.
 
 **5. Connect the app**: in FlashCert, **Settings → Sharing**, enter the address and the token, then
-**Save and test**. **Share** at the top of a course now creates its link.
+**Save and test**. The app backs up its courses there, and **Share** at the top of a course creates its link.
 
 ### Good to know
 
@@ -67,19 +68,31 @@ Share a course file directly (a [course document](#course-document) or a `flashc
 docker compose exec -T share flashcert-share import /dev/stdin --certification "Claude Agent SDK" < bundle.json
 ```
 
+An imported course has no owner, so no app can change it. Add `--owner TOKEN_ID` (see `token list`) to hand it to
+that token's app, which then downloads it at its next sync.
+
 ## How sharing works
 
-**One way, from the app to the server.** The app sends a course; all that comes back is its link, its visibility
-and the errors visitors report. The app never downloads courses from the server, so the server is not a backup of
-the app and can't move courses to another phone. It only keeps what visitors see (notes, revision sheet, questions,
-cards): recordings, transcript, analysis and costs never leave the phone. When the app changes a shared course, it
-sends it again, and the link stays the same.
+**Both ways, and the newest wins.** The app sends its courses and gets back their link, their visibility and the
+errors visitors report. It also downloads them: a course changed on another device comes back, and a course the
+phone doesn't have yet (a new phone, a reinstall, a tablet with the same token) is added to it. When both sides
+changed a course since they last synced, the most recent edit wins, the whole course at once. The server keeps only
+the course content (notes, revision sheet, questions, cards): recordings, transcript, analysis, costs and study
+progress (scores, cards known, review dates) never leave the phone. A course restored from the server starts its
+review cycle again.
 
-**Public or link-only.** Each course is published either *public*, listed on the server's home page grouped by
-certification, or *unlisted*, reachable only through its link. The app sets it when creating the link and can change
-it at any time. Neither one is private: anyone who has the link can open the course. Links are long random ids,
-so nobody finds an unlisted course by guessing. **Stop sharing** in the app deletes the course from the server, and
-its link stops working.
+**Which courses.** In **Settings → Sharing**, *Back up every course* (on by default) sends every finished course,
+*private* unless you share it. Turned off, only the courses you share go to the server.
+
+**Private, link-only or public.** A *private* course is a backup: it has no page, and its link answers "not found".
+*Unlisted* courses are reachable only through their link; *public* ones are also listed on the server's home page,
+grouped by certification. The app can change it at any time and the link stays the same. Unlisted and public
+courses aren't secret: anyone who has the link can open them. Links are long random ids, so nobody finds an
+unlisted course by guessing.
+
+**Stop sharing** makes a backed-up course private again. When the app doesn't back up every course, it removes the
+course from the server instead, and its link stops working. **Deleting a course** in the app deletes it from the
+server too, and from the other devices that sync it, unless one of them changed it after the deletion.
 
 **Several people on one server.** Give each person their own token, labelled with their name:
 
@@ -87,15 +100,18 @@ its link stops working.
 docker compose exec share flashcert-share token create --label alice
 ```
 
-Each person enters the server address and their token in their app. An app only sends, updates and removes the
-courses it published itself. Everyone's public courses appear together on the home page. `token list` shows
-each token's label and last use. `token revoke ID` stops one person from syncing without affecting the others
-(the courses they already published stay online).
+Each person enters the server address and their token in their app. Everyone's public courses appear together on
+the home page.
 
-**All tokens have the same rights.** The app stays out of other people's courses, but the sync API doesn't
-check who published what. Any token can list, change or delete every course on the server. The Sharing screen of
-every app lists the error reports on all courses, with other people's shown as "A course not on this phone",
-and any of them can be marked resolved. Give tokens only to people you trust. Visitors never need one.
+**Each token owns its courses.** A course belongs to the token that first sent it. Only that token sees it in the
+sync API, changes it, downloads it, deletes it and reads its error reports; for another token it doesn't exist.
+Use the same token on all of one person's devices so they sync together. `token list` shows each token's label,
+last use and number of courses. `token revoke ID` stops one token from syncing without affecting the others: its
+courses stay online, and `owner NEW_ID --from ID` hands them to another token (a replacement phone, for instance).
+
+Courses sent before owners existed (version 0.1) belong to the server's only token if there is just one. Otherwise
+the first token that sends one again claims it, which the app does by itself at its next sync. `courses` shows each
+course's owner, and `owner TOKEN_ID UID…` sets it by hand.
 
 ## Your data
 
@@ -134,9 +150,8 @@ docker compose restart share
 ```
 
 The second command fails without touching anything if `restore.db` isn't there. Courses keep the links they had in
-the backup. If an app still has a course that isn't in the backup, it treats that course as no longer shared, and
-sharing it again gives it a new link. A course changed in the app after the backup shows its older version until
-its next change, when the app sends it again.
+the backup. At their next sync, apps send again what the backup lacks: a course that isn't in it comes back with a
+new link, and a course changed on the phone after the backup replaces its older copy (the phone's edit is newer).
 
 With PostgreSQL ([below](#postgresql)) the data is in the `pgdata` volume instead:
 `docker compose exec db pg_dump -U flashcert flashcert > flashcert-share.sql`.
@@ -162,8 +177,9 @@ Inside the container: `docker compose exec share flashcert-share …`
 
 ```
 flashcert-share token create [--label NAME] | token list | token revoke ID
-flashcert-share courses                    shared courses with their links
-flashcert-share import FILE [--uid X] [--certification NAME] [--unlisted]
+flashcert-share courses                    courses with their links and owners
+flashcert-share owner TOKEN_ID UID… | --from TOKEN_ID | --unowned   give courses to a token
+flashcert-share import FILE [--uid X] [--certification NAME] [--unlisted] [--owner TOKEN_ID]
 flashcert-share reports [--all] [--resolve ID ...]
 flashcert-share copy-db TARGET_URL         copy everything to another (empty) database
 flashcert-share serve [--host] [--port] [--threads] [--proxies]   (what the container runs)
@@ -206,23 +222,29 @@ or cookie is stored (the rate limit lives in memory).
 
 ## Sync API (for the app)
 
-Every `/api/v1` call takes `Authorization: Bearer <token>`. JSON in, JSON out; errors are
-`{"error": "…"}` with 400, 401, 404, 413 (too large), 422 (course rejected) or 429.
+Every `/api/v1` call takes `Authorization: Bearer <token>` and only sees that token's courses and their reports:
+other people's courses answer 404 (403 when sending one). JSON in, JSON out; errors are `{"error": "…"}` with
+400, 401, 403, 404, 413 (too large), 422 (course rejected) or 429.
 
 | | |
 |---|---|
-| `GET /api/v1/status` | `{ok, version, courses, open_reports, base_url}`; use it for "Test connection" |
-| `GET /api/v1/courses` | every synced course: `{uid, share_id, url, title, certification, lang, position, visibility, hash, questions, cards, created_at, updated_at, open_reports}` |
-| `PUT /api/v1/courses/{uid}` | create or replace a course (body below). 201 when created, 200 otherwise. |
-| `GET /api/v1/courses/{uid}` | the summary plus `content` as stored |
-| `PATCH /api/v1/courses/{uid}` | `{"visibility": "public" \| "unlisted"}` without resending the course |
-| `DELETE /api/v1/courses/{uid}` | stop sharing: the course and its reports are deleted, the link stops working. Sharing again gives a new link. |
+| `GET /api/v1/status` | `{ok, version, courses, open_reports, base_url, token}` for this token (`token`: its label); use it for "Test connection" |
+| `GET /api/v1/courses` | `{courses, gone}`. `courses`: this token's courses, `{uid, share_id, url, title, certification, lang, position, visibility, hash, questions, cards, created_at, updated_at, modified_at, open_reports}`. `gone`: the ones it deleted, `{uid, reason, deleted_at}`, `reason` being `deleted` or `removed` |
+| `PUT /api/v1/courses/{uid}` | create or replace a course (body below). 201 when created, 200 otherwise. A course without an owner is claimed; a deleted one comes back with a new link. |
+| `GET /api/v1/courses/{uid}` | the summary plus `content` as stored: what the app downloads |
+| `PATCH /api/v1/courses/{uid}` | `{"visibility": "public" \| "unlisted" \| "private"}` without resending the course |
+| `DELETE /api/v1/courses/{uid}?reason=removed\|deleted` | the course and its reports are deleted and the link stops working; the uid goes to `gone` with the reason (default `removed`: taken off the server; `deleted`: deleted on the device, so the other devices delete it too) |
 | `GET /api/v1/reports?status=open\|resolved\|dismissed\|all&course={uid}&since_id={n}` | reports, oldest first: `{id, course_uid, element: {kind, id}, excerpt, message, author, status, created_at, updated_at}` |
 | `PATCH /api/v1/reports/{id}` | `{"status": "resolved" \| "dismissed" \| "open"}` |
 | `DELETE /api/v1/reports/{id}` | |
 
 `uid` is the app's own stable id for the course (1–100 characters among `A-Z a-z 0-9 . _ : -`), e.g. a UUID
-kept on the course row. The server answers with the public `url`, which never changes while the course is shared.
+kept on the course row. The server answers with the public `url`, which never changes while the course is on the
+server (a private course has one too; it works once the course is shared).
+
+`updated_at` is when the server last stored new content; `modified_at` is when that content was edited on the
+device that sent it (taken from the document, never later than the server's clock). The app compares
+`modified_at` with its own edit time to decide which side wins.
 
 ### Course document
 
@@ -234,6 +256,7 @@ kept on the course row. The server answers with the public `url`, which never ch
   "lang": "en",
   "visibility": "public",
   "position": 3,
+  "modified_at": 1760000000000,
   "notes": "## Section\n\n### Subsection\n...",
   "sheet": { "essentiel": [], "definitions": [], "structure": [], "pieges": [] },
   "questions": [
@@ -250,7 +273,9 @@ kept on the course row. The server answers with the public `url`, which never ch
 * Questions and cards use the app's own JSON (`mcq`, `multi`, `true_false`, `cloze`, `order`; the older single
   `source` object is accepted). Give each a stable `id`, such as the database row id, so reports point at the
   right item across syncs. Items without one get an id from their text.
-* `certification`, `lang`, `position` (order inside the certification), `sheet`, `questions` and `cards` are optional.
+* `visibility` is `public`, `unlisted` or `private`. `certification`, `lang`, `position` (order inside the
+  certification), `modified_at` (last edit on the device, milliseconds since the epoch), `sheet`, `questions` and
+  `cards` are optional.
 * Unplayable questions and cards are dropped and listed in `warnings` in the response. Transcript, analysis and
   costs are never stored, even when sent (a `flashcert-course-1` bundle is accepted as is).
 
@@ -258,13 +283,16 @@ The response is the course summary plus `created`, `changed` and `warnings`. `ha
 visitors see changes, so the app can compare it with a hash of its own (or simply re-send: identical content
 leaves `updated_at` alone).
 
-Suggested app flow: a **Sharing** section in Settings holds the server URL and token (with "Test connection"
-via `/status`). **Share** on a course sends `PUT` and opens the system share sheet with the returned `url`;
-later edits re-send it. Reports come from `GET /api/v1/reports?since_id=<last seen>`.
+App flow: a **Sharing** section in Settings holds the server URL and token (with "Test connection" via `/status`).
+Each sync deletes what the phone deleted, then compares every course with `GET /api/v1/courses`: by `hash` (what
+it last saw) and its own fingerprint it knows which side changed, sends with `PUT`, downloads with `GET` (by
+`modified_at` when both changed), deletes or unlinks what is in `gone`, and downloads courses it doesn't have.
+**Share** on a course sends `PUT` and opens the system share sheet with the returned `url`. Reports come from
+`GET /api/v1/reports?since_id=<last seen>`.
 
 ## Public endpoints
 
-`GET /api/public/courses`, `GET /api/public/courses/{share_id}` (what the pages use) and
+`GET /api/public/courses`, `GET /api/public/courses/{share_id}` (what the pages use; private courses answer 404) and
 `POST /api/public/courses/{share_id}/reports` with
 `{"element": {"kind": "question|card|section|sheet|course", "id": "q12"}, "message": "…", "name": "…"}`.
 Section ids are the notes numbering (`"2"`, `"2.1"`); sheet ids are `essentiel.0`, `definitions.3`,
