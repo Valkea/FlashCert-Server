@@ -47,19 +47,91 @@ certificate by itself; with nginx, run `certbot --nginx`). Then `https://courses
 
 ### Good to know
 
-* The image is `ghcr.io/valkea/flashcert-share` (amd64 and arm64). The container restarts by itself and keeps its
-  SQLite file in the `data` volume: back that volume up (or the PostgreSQL one).
-* Upgrade: `docker compose pull && docker compose up -d`. Tables are created on start. To stay on one version, set
-  `FLASHCERT_SHARE_IMAGE=ghcr.io/valkea/flashcert-share:1.2.3` in `.env`.
+* The image is `ghcr.io/valkea/flashcert-share` (amd64 and arm64). The container restarts by itself.
+* Upgrade: `docker compose pull && docker compose up -d`. Tables are created on start and the data stays (see
+  [Your data](#your-data)). To stay on one version, set `FLASHCERT_SHARE_IMAGE=ghcr.io/valkea/flashcert-share:1.2.3`
+  in `.env`.
 * Another port: `FLASHCERT_SHARE_PORT`. Under a path of an existing site (`example.com/courses/`) rather than its own
   subdomain: the proxy sends `X-Forwarded-Prefix` (both deploy files show how) and `FLASHCERT_SHARE_PUBLIC_URL`
   includes the path.
 * Building the image yourself: `docker compose build` in a clone of this repository.
-* A token can publish, change and delete every course on the server, so keep tokens to your own devices (one per
-  phone). `token list` and `token revoke ID` manage them. Visitors never need one.
 
 Images are built by GitHub Actions ([`.github/workflows/image.yml`](.github/workflows/image.yml)) after the tests
 pass: `:latest` and `:sha-…` from `main`, `:1.2.3` and `:1.2` from tags `v1.2.3`.
+
+## How sharing works
+
+**One way, from the app to the server.** The app sends a course; all that comes back is its link, its visibility
+and the errors visitors report. The app never downloads courses from the server, so the server is not a backup of
+the app and can't move courses to another phone. It only keeps what visitors see (notes, revision sheet, questions,
+cards): recordings, transcript, analysis and costs never leave the phone. When the app changes a shared course, it
+sends it again, and the link stays the same.
+
+**Public or link-only.** Each course is published either *public*, listed on the server's home page grouped by
+certification, or *unlisted*, reachable only through its link. The app sets it when creating the link and can change
+it at any time. Neither one is private: anyone who has the link can open the course. Links are long random ids,
+so nobody finds an unlisted course by guessing. **Stop sharing** in the app deletes the course from the server, and
+its link stops working.
+
+**Several people on one server.** Give each person their own token, labelled with their name:
+
+```bash
+docker compose exec share flashcert-share token create --label alice
+```
+
+Each person enters the server address and their token in their app. An app only sends, updates and removes the
+courses it published itself. Everyone's public courses appear together on the home page. `token list` shows
+each token's label and last use. `token revoke ID` stops one person from syncing without affecting the others
+(the courses they already published stay online).
+
+**All tokens have the same rights.** The app stays out of other people's courses, but the sync API doesn't
+check who published what. Any token can list, change or delete every course on the server. The Sharing screen of
+every app lists the error reports on all courses, with other people's shown as "A course not on this phone",
+and any of them can be marked resolved. Give tokens only to people you trust. Visitors never need one.
+
+## Your data
+
+The database is not inside the container. With the default SQLite, it is a file in a Docker **volume**: a separate
+storage area that Compose mounts at `/data` and keeps when the container goes away. So the data survives
+`docker compose restart`, `docker compose down` then `up`, upgrades (`pull`) and reboots of the server.
+
+It is lost only when the volume itself is deleted:
+
+* `docker compose down -v` (the `-v` deletes the volumes) or `docker volume rm`.
+* Compose names the volume after the folder: `flashcert-share_data` for a folder called `flashcert-share`. If you
+  start the server from a folder with another name, it gets a new, empty volume. The old volume and its data are
+  still there (`docker volume ls`). Go back to the original folder name, or set `COMPOSE_PROJECT_NAME` to the old
+  folder name in `.env`.
+* Without Compose, `docker run` needs `-v flashcert-share-data:/data`. Without it, every new container starts with an
+  empty volume of its own.
+
+**Backup** (the server keeps running):
+
+```bash
+docker compose exec share python -c "import sqlite3; b = sqlite3.connect('/data/backup.db'); sqlite3.connect('/data/flashcert-share.db').backup(b); b.close()"
+docker compose cp share:/data/backup.db ./flashcert-share-$(date +%F).db
+docker compose exec share sh -c 'rm -f /data/backup.db*'
+```
+
+Copy the `.db` file off the server. Don't copy `flashcert-share.db` directly from the volume while the server runs:
+recent changes may still be in the `-wal` file next to it.
+
+**Restore** (replaces everything on the server with the backup):
+
+```bash
+docker compose cp ./flashcert-share-2026-10-10.db share:/data/restore.db
+docker compose exec share python -c "import sqlite3; sqlite3.connect('file:/data/restore.db?mode=rw', uri=True).backup(sqlite3.connect('/data/flashcert-share.db'))"
+docker compose exec share sh -c 'rm -f /data/restore.db*'
+docker compose restart share
+```
+
+The second command fails without touching anything if `restore.db` isn't there. Courses keep the links they had in
+the backup. If an app still has a course that isn't in the backup, it treats that course as no longer shared, and
+sharing it again gives it a new link. A course changed in the app after the backup shows its older version until
+its next change, when the app sends it again.
+
+With PostgreSQL ([below](#postgresql)) the data is in the `pgdata` volume instead:
+`docker compose exec db pg_dump -U flashcert flashcert > flashcert-share.sql`.
 
 ### Try a course before the app syncs
 
