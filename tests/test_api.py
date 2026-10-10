@@ -2,7 +2,8 @@ from flashcert_share import db
 
 
 def put(client, auth, course, uid="course-1"):
-    return client.put(f"/api/v1/courses/{uid}", json=course, headers=auth)
+    current = client.get(f"/api/v1/courses/{uid}", headers=auth).get_json()
+    return client.put(f"/api/v1/courses/{uid}", json={**course, "expected_revision": current.get("revision", 0)}, headers=auth)
 
 
 def test_sync_needs_a_valid_token(client, course):
@@ -61,7 +62,7 @@ def test_public_list_hides_unlisted_courses(client, auth, course):
 
 def test_patch_visibility_without_resending(client, auth, course):
     body = put(client, auth, course).get_json()
-    r = client.patch("/api/v1/courses/course-1", json={"visibility": "unlisted"}, headers=auth)
+    r = client.patch("/api/v1/courses/course-1", json={"visibility": "unlisted", "expected_revision": body["revision"]}, headers=auth)
     assert r.get_json()["visibility"] == "unlisted"
     assert client.get("/api/public/courses").get_json()["courses"] == []
     assert r.get_json()["share_id"] == body["share_id"]
@@ -110,14 +111,15 @@ def test_rejects_bad_documents(client, auth, course):
     assert client.put("/api/v1/courses/x", data="not json", headers={**auth, "Content-Type": "application/json"}).status_code == 400
 
 
-def test_delete_removes_course_and_reports(client, auth, engine, course):
+def test_delete_hides_course_and_preserves_reports_for_recovery(client, auth, engine, course):
     share_id = put(client, auth, course).get_json()["share_id"]
     client.post(f"/api/public/courses/{share_id}/reports", json={"element": {"kind": "course"}, "message": "Typo here"})
-    assert client.delete("/api/v1/courses/course-1", headers=auth).status_code == 204
+    url = "/api/v1/courses/course-1?expected_revision=1&confirmation=delete-1-removed"
+    assert client.delete(url, headers=auth).status_code == 204
     assert client.get(f"/c/{share_id}").status_code == 404
     with engine.connect() as conn:
-        assert conn.execute(db.report.select()).first() is None
-    assert client.delete("/api/v1/courses/course-1", headers=auth).status_code == 404
+        assert conn.execute(db.report.select()).first() is not None
+    assert client.delete(url, headers=auth).status_code == 204
 
 
 def test_list_courses_for_the_app(client, auth, course):

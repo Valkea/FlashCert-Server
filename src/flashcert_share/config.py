@@ -34,6 +34,10 @@ class Config:
     max_upload_mb: int = 20
     #: Anonymous error reports allowed per visitor IP per hour.
     reports_per_hour: int = 20
+    history_limit: int = 20
+    trash_days: int = 30
+    notes_change_percent: int = 30
+    items_change_percent: int = 20
 
     @classmethod
     def from_env(cls, **overrides) -> "Config":
@@ -49,6 +53,10 @@ class Config:
             site_name=_env("SITE_NAME", "FlashCert"),
             max_upload_mb=int(_env("MAX_UPLOAD_MB", "20")),
             reports_per_hour=int(_env("REPORTS_PER_HOUR", "20")),
+            history_limit=max(2, int(_env("HISTORY_LIMIT", "20"))),
+            trash_days=max(1, int(_env("TRASH_DAYS", "30"))),
+            notes_change_percent=max(1, min(100, int(_env("NOTES_CHANGE_PERCENT", "30")))),
+            items_change_percent=max(1, min(100, int(_env("ITEMS_CHANGE_PERCENT", "20")))),
         )
         for key, value in overrides.items():
             if value is not None:

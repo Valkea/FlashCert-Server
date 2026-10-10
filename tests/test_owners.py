@@ -4,7 +4,7 @@ import json
 
 from sqlalchemy import create_engine, select, text
 
-from flashcert_share import cli, db
+from flashcert_share import cli, db, payload
 from flashcert_share.app import create_app
 from flashcert_share.config import Config
 
@@ -15,7 +15,8 @@ def token(engine, label="other"):
 
 
 def put(client, headers, course, uid="course-1"):
-    return client.put(f"/api/v1/courses/{uid}", json=course, headers=headers)
+    current = client.get(f"/api/v1/courses/{uid}", headers=headers).get_json()
+    return client.put(f"/api/v1/courses/{uid}", json={"expected_revision": current.get("revision", 0), **course}, headers=headers)
 
 
 def test_other_tokens_cannot_see_or_touch_a_course(client, auth, engine, course):
@@ -69,7 +70,7 @@ def test_private_course_is_a_backup_without_a_page(client, auth, course):
     assert [c["uid"] for c in client.get("/api/v1/courses", headers=auth).get_json()["courses"]] == ["course-1"]
 
     # Shared later: same link.
-    r = client.patch("/api/v1/courses/course-1", json={"visibility": "unlisted"}, headers=auth)
+    r = client.patch("/api/v1/courses/course-1", json={"visibility": "unlisted", "expected_revision": 1}, headers=auth)
     assert r.get_json()["share_id"] == sid
     assert client.get(f"/c/{sid}").status_code == 200
 
@@ -77,9 +78,9 @@ def test_private_course_is_a_backup_without_a_page(client, auth, course):
 def test_deleted_course_is_listed_as_gone_for_its_owner_only(client, auth, engine, course):
     first = put(client, auth, course).get_json()
     assert client.delete("/api/v1/courses/course-1?reason=bogus", headers=auth).status_code == 400
-    assert client.delete("/api/v1/courses/course-1?reason=deleted", headers=auth).status_code == 204
+    assert client.delete("/api/v1/courses/course-1?reason=deleted&expected_revision=1&confirmation=delete-1-deleted", headers=auth).status_code == 204
     put(client, auth, course, uid="course-2")
-    client.delete("/api/v1/courses/course-2", headers=auth)
+    client.delete("/api/v1/courses/course-2?expected_revision=1&confirmation=delete-1-removed", headers=auth)
 
     listing = client.get("/api/v1/courses", headers=auth).get_json()
     assert listing["courses"] == []
@@ -88,9 +89,11 @@ def test_deleted_course_is_listed_as_gone_for_its_owner_only(client, auth, engin
     assert client.get("/api/v1/courses", headers=other).get_json()["gone"] == []
     assert put(client, other, course).status_code == 403
 
-    # Sending it again brings it back, with a new link.
-    again = put(client, auth, course)
-    assert again.status_code == 201 and again.get_json()["share_id"] != first["share_id"]
+    # Only an explicit restore brings it back, preserving its link.
+    assert put(client, auth, course).status_code == 409
+    again = client.post("/api/v1/courses/course-1/restore", json={"revision": 1, "expected_revision": 2,
+                        "confirmation": "restore-2-1"}, headers=auth)
+    assert again.status_code == 200 and again.get_json()["share_id"] == first["share_id"]
     assert [g["uid"] for g in client.get("/api/v1/courses", headers=auth).get_json()["gone"]] == ["course-2"]
 
 
@@ -102,7 +105,8 @@ def test_course_without_owner_is_claimed_by_the_first_token_that_sends_it(client
     assert client.get("/api/v1/courses", headers=auth).get_json()["courses"] == []
     assert client.get("/api/v1/courses/legacy", headers=auth).status_code == 404
 
-    r = put(client, auth, course, uid="legacy")
+    meta, content, _ = payload.normalize(course)
+    r = put(client, auth, {**course, "expected_revision": 1, "confirmation": payload.content_hash(meta, content)}, uid="legacy")
     assert r.status_code == 200 and not r.get_json()["created"]
     assert [c["uid"] for c in client.get("/api/v1/courses", headers=auth).get_json()["courses"]] == ["legacy"]
     _, other = token(engine)
@@ -164,6 +168,15 @@ def test_upgrade_with_several_tokens_leaves_old_courses_unowned(tmp_path):
     db.init(engine)
     with engine.connect() as conn:
         assert conn.execute(select(db.course.c.owner_id)).scalar_one() is None
+
+
+def test_upgrade_snapshots_existing_content(tmp_path):
+    engine = db.make_engine(v1_database(tmp_path / "history.db", tokens=1))
+    db.init(engine)
+    db.init(engine)
+    with engine.connect() as conn:
+        row = conn.execute(select(db.course_revision)).one()
+        assert row.revision == 1 and json.loads(row.snapshot)["title"] == "Old"
 
 
 def test_command_line_import_and_owner(tmp_path, capsys, course):

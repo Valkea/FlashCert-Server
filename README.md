@@ -222,6 +222,32 @@ or cookie is stored (the rate limit lives in memory).
 
 ## Sync API (for the app)
 
+### Recoverable sync (0.3+)
+
+Each course carries a monotonic `revision`. Existing-course writes, visibility changes, deletions and restores
+must send `expected_revision`; missing revisions answer 428 and stale revisions answer 409. A new course starts
+at revision 1 (`expected_revision: 0` when creating). Identical re-sends don't make another revision.
+
+Large replacements answer 409 with `code: confirmation_required`, a `changes` summary and a `confirmation`
+value bound to the proposed normalized content. `POST /api/v1/courses/{uid}/preview` takes the proposed document
+and its expected revision and returns that summary before writing. After review, re-send the exact document
+with its `confirmation`. Editing the document or advancing the server revision invalidates the approval.
+
+Deletion is recoverable: `DELETE ...?reason=deleted&expected_revision=R&confirmation=delete-R-deleted` hides the
+course and keeps its content and reports. Use `removed` instead of `deleted` to remove only the server copy.
+`GET /api/v1/trash` lists retained deleted courses. `GET /api/v1/courses/{uid}/history` lists revisions and
+their originating `X-FlashCert-Device`; `GET .../history/{revision}` previews a full snapshot.
+`POST .../restore` takes `{revision: V, expected_revision: R, confirmation: "restore-R-V"}` and makes a new
+current revision with `event: restored`, preserving the uid and share link. Devices must clear superseded
+deletion markers when processing that restore; they must not delete a restored course again automatically.
+
+Defaults: the last 20 revisions, trash retained 30 days, review at 30% rewritten notes or 20% removed/edited
+questions or cards. Clearing an existing sheet also needs review. Settings are `FLASHCERT_SHARE_HISTORY_LIMIT`,
+`FLASHCERT_SHARE_TRASH_DAYS`, `FLASHCERT_SHARE_NOTES_CHANGE_PERCENT` and `FLASHCERT_SHARE_ITEMS_CHANGE_PERCENT`.
+Expired trash and excess live history are pruned on startup and writes; deletion tombstones remain to prevent
+silent resurrection by an old device. `/status` advertises `safe_sync: 1` and the configured thresholds.
+Old clients can read and create courses but cannot silently change or delete existing content.
+
 Every `/api/v1` call takes `Authorization: Bearer <token>` and only sees that token's courses and their reports:
 other people's courses answer 404 (403 when sending one). JSON in, JSON out; errors are `{"error": "…"}` with
 400, 401, 403, 404, 413 (too large), 422 (course rejected) or 429.

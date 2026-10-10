@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import secrets
 import time
 
@@ -19,13 +20,14 @@ from sqlalchemy import (
     create_engine,
     event,
     func,
+    inspect,
     or_,
     select,
     text,
 )
 from sqlalchemy.engine import Engine
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 metadata = MetaData()
 
@@ -78,6 +80,9 @@ course = Table(
     #: When the content was last edited on the device that sent it: the newer side wins when two devices both
     #: changed a course since they last synced.
     Column("modified_at", BigInteger),
+    Column("revision", BigInteger, nullable=False, default=1),
+    Column("deleted_at", BigInteger),
+    Column("event", String(16), nullable=False, default="created"),
 )
 
 #: Courses deleted through the sync API, so the owner's other devices learn about it. reason: "deleted" (the
@@ -89,6 +94,17 @@ course_gone = Table(
     Column("owner_id", Integer),
     Column("reason", String(10), nullable=False),
     Column("deleted_at", BigInteger, nullable=False),
+    Column("revision", BigInteger, nullable=False, default=0),
+)
+
+course_revision = Table(
+    "course_revision", metadata,
+    Column("course_id", Integer, ForeignKey("course.id", ondelete="CASCADE"), primary_key=True),
+    Column("revision", BigInteger, primary_key=True),
+    Column("snapshot", Text, nullable=False),
+    Column("action", String(16), nullable=False),
+    Column("device", String(100), nullable=False, default=""),
+    Column("created_at", BigInteger, nullable=False),
 )
 
 #: Errors flagged by visitors on one element of a course.
@@ -146,6 +162,8 @@ def init(engine: Engine) -> None:
         version = int(row.value)
         if version < 2:
             _to_v2(conn)
+        if version < 3:
+            _to_v3(conn)
         if version < SCHEMA_VERSION:
             conn.execute(meta.update().where(meta.c.key == "schema_version").values(value=str(SCHEMA_VERSION)))
 
@@ -159,6 +177,18 @@ def _to_v2(conn) -> None:
     tokens = conn.execute(select(token.c.id)).scalars().all()
     if len(tokens) == 1:
         conn.execute(course.update().values(owner_id=tokens[0]))
+
+
+def _to_v3(conn) -> None:
+    for table, columns in (("course", {"revision": "BIGINT NOT NULL DEFAULT 1", "deleted_at": "BIGINT",
+                                        "event": "VARCHAR(16) NOT NULL DEFAULT 'created'"}),
+                           ("course_gone", {"revision": "BIGINT NOT NULL DEFAULT 0"})):
+        present = {c["name"] for c in inspect(conn).get_columns(table)}
+        for name, definition in columns.items():
+            if name not in present:
+                conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {name} {definition}"))
+    for row in conn.execute(select(course)).all():
+        _snapshot(conn, row, "migrated", "")
 
 
 # --- Tokens -------------------------------------------------------------------------------------
@@ -195,7 +225,8 @@ def check_token(engine: Engine, raw: str) -> int | None:
 
 def list_tokens(engine: Engine) -> list[dict]:
     """Every token, revoked ones included, with the number of courses it owns."""
-    owned = (select(course.c.owner_id, func.count().label("courses")).group_by(course.c.owner_id)).subquery()
+    owned = (select(course.c.owner_id, func.count().label("courses"))
+             .where(course.c.deleted_at.is_(None)).group_by(course.c.owner_id)).subquery()
     with engine.connect() as conn:
         rows = conn.execute(select(token.c.id, token.c.label, token.c.created_at, token.c.last_used_at,
                                    token.c.revoked_at, func.coalesce(owned.c.courses, 0).label("courses"))
@@ -223,7 +254,36 @@ class NotYours(Exception):
     """The course belongs to another token."""
 
 
-def save_course(engine: Engine, uid: str, values: dict, owner_id: int | None) -> tuple[bool, bool]:
+class SyncConflict(Exception):
+    def __init__(self, code: str, revision: int = 0, **details):
+        self.code, self.revision, self.details = code, revision, details
+        super().__init__(code.replace("_", " "))
+
+
+def _snapshot(conn, row, action: str, device: str) -> None:
+    conn.execute(course_revision.insert().values(course_id=row.id, revision=row.revision,
+                 snapshot=json.dumps(dict(row._mapping), ensure_ascii=False), action=action,
+                 device=device[:100], created_at=now_ms()))
+
+
+def _expected(row, expected: int | None) -> None:
+    if expected is None:
+        raise SyncConflict("revision_required", row.revision)
+    if expected != row.revision:
+        raise SyncConflict("revision_conflict", row.revision)
+
+
+def _update(conn, row, values: dict, action: str, device: str) -> None:
+    done = conn.execute(course.update().where(course.c.id == row.id, course.c.revision == row.revision)
+                        .values(**values, revision=row.revision + 1, event=action)).rowcount
+    if done != 1:
+        raise SyncConflict("revision_conflict", row.revision)
+    _snapshot(conn, conn.execute(select(course).where(course.c.id == row.id)).one(), action, device)
+
+
+def save_course(engine: Engine, uid: str, values: dict, owner_id: int | None, *, expected: int | None = None,
+                confirmation: str | None = None, device: str = "", notes_limit: int = 30,
+                items_limit: int = 20) -> tuple[bool, bool]:
     """Creates or replaces course ``uid``; returns (created, changed).
 
     ``values`` are the columns taken from the document: the meta, content, content_hash, counts and modified_at.
@@ -232,23 +292,35 @@ def save_course(engine: Engine, uid: str, values: dict, owner_id: int | None) ->
     """
     now = now_ms()
     with engine.begin() as conn:
-        existing = conn.execute(select(course.c.id, course.c.owner_id, course.c.content_hash, course.c.visibility)
-                                .where(course.c.uid == uid)).first()
+        existing = conn.execute(select(course).where(course.c.uid == uid).with_for_update()).first()
         if existing is None:
-            gone = conn.execute(select(course_gone.c.owner_id).where(course_gone.c.uid == uid)).first()
+            gone = conn.execute(select(course_gone).where(course_gone.c.uid == uid)).first()
             if gone is not None:
                 if owner_id is not None and gone.owner_id not in (None, owner_id):
                     raise NotYours(uid)
-                conn.execute(course_gone.delete().where(course_gone.c.uid == uid))
+                raise SyncConflict("course_deleted", gone.revision)
+            if expected not in (None, 0):
+                raise SyncConflict("revision_conflict", 0)
             share_id = new_share_id()
             while conn.execute(select(course.c.id).where(course.c.share_id == share_id)).first():
                 share_id = new_share_id()
             conn.execute(course.insert().values(uid=uid, share_id=share_id, owner_id=owner_id, created_at=now,
                                                 updated_at=now, **values))
+            _snapshot(conn, conn.execute(select(course).where(course.c.uid == uid)).one(), "created", device)
             return True, True
         if owner_id is not None and existing.owner_id not in (None, owner_id):
             raise NotYours(uid)
+        if existing.deleted_at is not None:
+            raise SyncConflict("course_deleted", existing.revision)
         changed = existing.content_hash != values["content_hash"]
+        if owner_id is not None and (changed or existing.visibility != values["visibility"]):
+            _expected(existing, expected)
+            if changed:
+                from .changes import summarize
+                impact = summarize(json.loads(existing.content), json.loads(values["content"]), notes_limit, items_limit)
+                if impact["large"] and confirmation != values["content_hash"]:
+                    raise SyncConflict("confirmation_required", existing.revision, changes=impact,
+                                       confirmation=values["content_hash"])
         update: dict = {}
         if changed:
             update = {**values, "updated_at": now}
@@ -257,18 +329,64 @@ def save_course(engine: Engine, uid: str, values: dict, owner_id: int | None) ->
         if owner_id is not None and existing.owner_id is None:
             update["owner_id"] = owner_id
         if update:
-            conn.execute(course.update().where(course.c.id == existing.id).values(**update))
+            _update(conn, existing, update, "updated" if changed else "visibility", device)
         return False, changed
 
 
-def delete_course(engine: Engine, course_id: int, uid: str, owner_id: int | None, reason: str) -> None:
+def delete_course(engine: Engine, course_id: int, uid: str, owner_id: int | None, reason: str, *,
+                  expected: int | None = None, confirmation: str | None = None, device: str = "") -> None:
     """Deletes the course and its reports, and remembers it for the owner's other devices."""
     with engine.begin() as conn:
-        # Explicit, so it also holds where the database ignores ON DELETE CASCADE.
-        conn.execute(report.delete().where(report.c.course_id == course_id))
-        conn.execute(course.delete().where(course.c.id == course_id))
+        row = conn.execute(select(course).where(course.c.id == course_id).with_for_update()).one()
+        if row.owner_id != owner_id:
+            raise NotYours(uid)
+        if row.deleted_at is not None and expected == row.revision - 1 and confirmation == f"delete-{expected}-{reason}":
+            return  # A retry after a lost response; a later restore invalidates this approval.
+        _expected(row, expected)
+        if confirmation != f"delete-{row.revision}-{reason}":
+            raise SyncConflict("confirmation_required", row.revision,
+                               confirmation=f"delete-{row.revision}-{reason}")
+        if row.deleted_at is not None:
+            return
+        _update(conn, row, {"deleted_at": now_ms()}, reason, device)
         conn.execute(course_gone.delete().where(course_gone.c.uid == uid))
-        conn.execute(course_gone.insert().values(uid=uid, owner_id=owner_id, reason=reason, deleted_at=now_ms()))
+        conn.execute(course_gone.insert().values(uid=uid, owner_id=owner_id, reason=reason,
+                                               deleted_at=now_ms(), revision=row.revision + 1))
+
+
+def restore_course(engine: Engine, uid: str, owner_id: int, revision: int, expected: int,
+                   confirmation: str, device: str = "") -> None:
+    with engine.begin() as conn:
+        row = conn.execute(select(course).where(course.c.uid == uid).with_for_update()).first()
+        if row is None or row.owner_id != owner_id:
+            raise NotYours(uid)
+        _expected(row, expected)
+        if confirmation != f"restore-{expected}-{revision}":
+            raise SyncConflict("confirmation_required", row.revision, confirmation=f"restore-{expected}-{revision}")
+        snapshot = conn.execute(select(course_revision.c.snapshot)
+                                .where(course_revision.c.course_id == row.id,
+                                       course_revision.c.revision == revision)).scalar_one_or_none()
+        if snapshot is None:
+            raise SyncConflict("revision_not_found", row.revision)
+        saved = json.loads(snapshot)
+        values = {k: saved[k] for k in ("title", "certification", "lang", "position", "visibility", "content",
+                                      "content_hash", "question_count", "card_count")}
+        values.update(deleted_at=None, updated_at=now_ms(), modified_at=now_ms())
+        _update(conn, row, values, "restored", device)
+        conn.execute(course_gone.delete().where(course_gone.c.uid == uid))
+
+
+def prune(engine: Engine, history_limit: int = 20, trash_days: int = 30) -> None:
+    """Bound history; retain tombstones after expired trash is purged to stop stale resurrection."""
+    with engine.begin() as conn:
+        for row in conn.execute(select(course.c.id, course.c.revision, course.c.deleted_at)).all():
+            if row.deleted_at is not None and row.deleted_at < now_ms() - trash_days * 86_400_000:
+                conn.execute(report.delete().where(report.c.course_id == row.id))
+                conn.execute(course_revision.delete().where(course_revision.c.course_id == row.id))
+                conn.execute(course.delete().where(course.c.id == row.id))
+            elif row.deleted_at is None:
+                conn.execute(course_revision.delete().where(course_revision.c.course_id == row.id,
+                                                            course_revision.c.revision <= row.revision - history_limit))
 
 
 def give_courses(engine: Engine, token_id: int, uids: list[str] | None = None, from_id: int | None = None,
