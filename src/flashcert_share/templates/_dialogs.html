@@ -1,0 +1,60 @@
+{# Dialog shells; static/i18n.js fills the data-t texts and the scripts fill the rest. #}
+<dialog class="sheet-dialog" id="progress-dialog" aria-labelledby="progress-title">
+  <form method="dialog" class="dialog-body">
+    <h2 id="progress-title" data-t="progress_title"></h2>
+    <p data-t="progress_why"></p>
+    <ul class="facts">
+      <li data-t="progress_fact_local"></li>
+      <li data-t="progress_fact_nothing_sent"></li>
+      <li data-t="progress_fact_persist"></li>
+    </ul>
+    <p class="status" id="progress-status" role="status"></p>
+    <div class="dialog-actions">
+      <button type="button" class="btn danger ghost" id="progress-forget" data-t="progress_forget" hidden></button>
+      <span class="spacer"></span>
+      <button value="cancel" class="btn ghost" id="progress-later" data-t="not_now"></button>
+      <button type="button" class="btn" id="progress-enable" data-t="progress_enable"></button>
+    </div>
+  </form>
+</dialog>
+
+<dialog class="sheet-dialog" id="report-dialog" aria-labelledby="report-title">
+  <form class="dialog-body" id="report-form">
+    <h2 id="report-title" data-t="report_title"></h2>
+    <blockquote class="report-excerpt" id="report-excerpt"></blockquote>
+    <label class="field">
+      <span data-t="report_message"></span>
+      <textarea name="message" rows="4" minlength="3" maxlength="2000" required></textarea>
+    </label>
+    <label class="field">
+      <span data-t="report_name"></span>
+      <input name="name" maxlength="80" autocomplete="nickname">
+    </label>
+    <label class="hp" aria-hidden="true">Website <input name="website" tabindex="-1" autocomplete="off"></label>
+    <p class="hint" data-t="report_hint"></p>
+    <p class="status" id="report-status" role="status"></p>
+    <div class="dialog-actions">
+      <span class="spacer"></span>
+      <button type="button" class="btn ghost" data-close data-t="cancel"></button>
+      <button type="submit" class="btn" id="report-send" data-t="send"></button>
+    </div>
+  </form>
+</dialog>
+
+<dialog class="sheet-dialog passage-dialog" id="passage-dialog" aria-labelledby="passage-title">
+  <div class="dialog-body">
+    <div class="passage-head">
+      <p class="eyebrow" data-t="passage_eyebrow"></p>
+      <button type="button" class="icon-button" data-close data-t-label="close"><svg class="icon"><use href="#i-x"/></svg></button>
+    </div>
+    <h2 id="passage-title"></h2>
+    <div class="chips" id="passage-chips"></div>
+    <div class="md passage-body" id="passage-body"></div>
+    <p class="hint" id="passage-missing" data-t="passage_not_found" hidden></p>
+    <div class="dialog-actions">
+      <button type="button" class="btn ghost" id="passage-in-notes" data-t="passage_open_notes"></button>
+      <span class="spacer"></span>
+      <button type="button" class="btn" data-close data-t="passage_back"></button>
+    </div>
+  </div>
+</dialog>

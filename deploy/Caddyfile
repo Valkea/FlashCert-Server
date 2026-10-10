@@ -1,0 +1,16 @@
+# Caddy gets the TLS certificate by itself.
+courses.example.com {
+	request_body {
+		max_size 20MB
+	}
+	reverse_proxy 127.0.0.1:8080
+}
+
+# Under a path of an existing site, with FLASHCERT_SHARE_PUBLIC_URL=https://example.com/courses:
+# example.com {
+# 	handle_path /courses/* {
+# 		reverse_proxy 127.0.0.1:8080 {
+# 			header_up X-Forwarded-Prefix /courses
+# 		}
+# 	}
+# }

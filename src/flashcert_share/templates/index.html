@@ -1,0 +1,50 @@
+{% extends "base.html" %}
+{% block meta %}
+  <meta name="description" content="{{ t.intro }}">
+  <meta property="og:title" content="{{ site_name }} · {{ t.courses }}">
+  <meta property="og:type" content="website">
+{% endblock %}
+{% block content %}
+<section class="hero">
+  <h1>{{ t.courses }}</h1>
+  <p class="muted">{{ t.intro }}</p>
+  {% if groups %}
+  <label class="search">
+    <svg class="icon" aria-hidden="true"><use href="#i-search"/></svg>
+    <input type="search" id="course-search" placeholder="{{ t.search }}" aria-label="{{ t.search }}" autocomplete="off">
+  </label>
+  {% endif %}
+</section>
+
+{% if not groups %}
+<p class="empty">{{ t.no_courses }}</p>
+{% endif %}
+
+{% for group in groups %}
+<section class="cert-group">
+  <h2 class="cert-name">
+    <svg class="icon" aria-hidden="true"><use href="#i-cap"/></svg>{{ group.name or t.other }}
+  </h2>
+  <ul class="course-list">
+    {% for c in group.courses %}
+    <li class="course-item" data-search="{{ (c.title ~ ' ' ~ (group.name or ''))|lower }}">
+      <a href="{{ url_for('course_page', share_id=c.share_id) }}" data-share-id="{{ c.share_id }}" data-cards="{{ c.card_count }}">
+        <span class="course-title">{{ c.title }}</span>
+        <span class="course-meta">
+          {% if c.lang %}<span class="chip">{{ c.lang|upper }}</span>{% endif %}
+          <span>{{ c.question_count }} {{ t.questions }}</span>
+          <span>{{ c.card_count }} {{ t.cards }}</span>
+          <span>{{ t.updated }} <time datetime="{{ day(c.updated_at) }}">{{ day(c.updated_at) }}</time></span>
+        </span>
+        <span class="course-progress" hidden></span>
+      </a>
+    </li>
+    {% endfor %}
+  </ul>
+</section>
+{% endfor %}
+<p class="empty" id="no-match" hidden>{{ t.no_match }}</p>
+{% endblock %}
+{% block scripts %}
+<script src="{{ url_for('static', filename='index.js') }}?v={{ version }}"></script>
+{% endblock %}

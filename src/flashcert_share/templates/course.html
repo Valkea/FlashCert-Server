@@ -1,0 +1,52 @@
+{% extends "base.html" %}
+{% block title %}{{ title }} · {{ site_name }}{% endblock %}
+{% block meta %}
+  {% if unlisted %}<meta name="robots" content="noindex">{% endif %}
+  <link rel="canonical" href="{{ url }}">
+  <meta name="description" content="{{ description }}">
+  <meta property="og:title" content="{{ title }}">
+  <meta property="og:description" content="{{ description }}">
+  <meta property="og:type" content="article">
+  <meta property="og:url" content="{{ url }}">
+  <meta property="og:site_name" content="{{ site_name }}">
+{% endblock %}
+{% block body_class %}course-page{% endblock %}
+{% block content %}
+<article class="course" id="course" data-share-id="{{ course.share_id }}" data-url="{{ url }}"
+         data-report-url="{{ url_for('api_report', share_id=course.share_id) }}">
+  <header class="course-head">
+    <a class="back" href="{{ url_for('index') }}"><svg class="icon"><use href="#i-back"/></svg>{{ t.back }}</a>
+    {% if course.certification %}
+    <p class="cert-chip"><svg class="icon" aria-hidden="true"><use href="#i-cap"/></svg>{{ course.certification }}</p>
+    {% endif %}
+    <h1>{{ title }}</h1>
+    <div class="course-bar">
+      <span class="course-meta" id="course-meta">
+        {% if course.lang %}<span class="chip">{{ course.lang|upper }}</span>{% endif %}
+      </span>
+      <span class="course-tools">
+        <button type="button" class="btn ghost small" id="copy-link"><svg class="icon"><use href="#i-link"/></svg><span data-t="share"></span></button>
+        <button type="button" class="btn ghost small flag-course" data-kind="course" data-id=""><svg class="icon"><use href="#i-flag"/></svg><span data-t="report_short"></span></button>
+      </span>
+    </div>
+  </header>
+
+  <nav class="tabs" role="tablist" aria-label="{{ title }}">
+    <button type="button" role="tab" id="tab-notes" aria-controls="panel-notes" data-tab="notes"><svg class="icon"><use href="#i-book"/></svg><span data-t="tab_notes"></span></button>
+    <button type="button" role="tab" id="tab-sheet" aria-controls="panel-sheet" data-tab="sheet"><svg class="icon"><use href="#i-cap"/></svg><span data-t="tab_sheet"></span></button>
+    <button type="button" role="tab" id="tab-quiz" aria-controls="panel-quiz" data-tab="quiz"><svg class="icon"><use href="#i-quiz"/></svg><span data-t="tab_quiz"></span></button>
+    <button type="button" role="tab" id="tab-cards" aria-controls="panel-cards" data-tab="cards"><svg class="icon"><use href="#i-cards"/></svg><span data-t="tab_cards"></span></button>
+  </nav>
+
+  <section class="panel notes" id="panel-notes" role="tabpanel" aria-labelledby="tab-notes" hidden></section>
+  <section class="panel sheet" id="panel-sheet" role="tabpanel" aria-labelledby="tab-sheet" hidden></section>
+  <section class="panel quiz" id="panel-quiz" role="tabpanel" aria-labelledby="tab-quiz" hidden></section>
+  <section class="panel cards" id="panel-cards" role="tabpanel" aria-labelledby="tab-cards" hidden></section>
+  <noscript><p class="empty">{{ t.noscript }}</p></noscript>
+</article>
+<script type="application/json" id="course-data">{{ course|tojson }}</script>
+{% endblock %}
+{% block scripts %}
+<script src="{{ url_for('static', filename='md.js') }}?v={{ version }}"></script>
+<script src="{{ url_for('static', filename='course.js') }}?v={{ version }}"></script>
+{% endblock %}
