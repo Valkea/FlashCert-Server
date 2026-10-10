@@ -119,3 +119,13 @@ def test_legacy_clients_never_receive_destructive_download_or_deletion_instructi
     client.delete("/api/v1/courses/safe?expected_revision=1&confirmation=delete-1-removed", headers=auth)
     assert client.get("/api/v1/courses", headers=legacy).get_json() == {"courses": []}
     assert len(client.get("/api/v1/courses", headers=auth).get_json()["gone"]) == 1
+
+
+def test_replacing_a_nonempty_sheet_requires_review_even_when_notes_and_counts_stay_the_same(client, auth, course):
+    create(client, auth, course)
+    replacement = {**course, "sheet": {"essentiel": ["Completely unrelated replacement content"]}, "expected_revision": 1}
+    response = client.put("/api/v1/courses/safe", json=replacement, headers=auth)
+    assert response.status_code == 409
+    impact = response.get_json()["changes"]
+    assert impact["sheet_changed"] and impact["sheet_changed_percent"] >= 30
+    assert impact["notes_changed_percent"] == 0

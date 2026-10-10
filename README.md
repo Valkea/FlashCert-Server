@@ -245,7 +245,7 @@ deletion markers when processing that restore; they must not delete a restored c
 To restore privately before re-sharing, include `visibility: "private"` and use confirmation `restore-R-V-private`;
 then upload the separately reviewed current document. This avoids briefly republishing an older public snapshot.
 
-Defaults: the last 20 revisions, trash retained 30 days, review at 30% rewritten notes or 20% removed/edited
+Defaults: the last 20 revisions, trash retained 30 days, review at 30% rewritten notes or sheets, or 20% removed/edited
 questions or cards. Clearing an existing sheet also needs review. Settings are `FLASHCERT_SHARE_HISTORY_LIMIT`,
 `FLASHCERT_SHARE_TRASH_DAYS`, `FLASHCERT_SHARE_NOTES_CHANGE_PERCENT` and `FLASHCERT_SHARE_ITEMS_CHANGE_PERCENT`.
 Expired trash and excess live history are pruned on startup and writes; deletion tombstones remain to prevent
