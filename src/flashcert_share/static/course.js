@@ -209,7 +209,9 @@
   function renderSheet() {
     var s = sheet || {};
     var out = panels.sheet;
-    function heading(key) { out.append(h("h2", { class: "sheet-title", text: t(key) })); }
+    function heading(key) {
+      out.append(h("h2", { class: "sheet-title" }, h("span", { class: "marker-title", text: t(key) })));
+    }
     function field(col, label, value) {
       if (value == null || !String(value).trim()) return;
       col.append(mdInline("*" + t(label) + "* : " + value, "p"));

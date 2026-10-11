@@ -68,7 +68,7 @@
       sheet_pitfalls: "À ne pas confondre", step_n: "Étape {0}", field_trap: "Piège", field_phase: "Phase",
       field_context: "Contexte", field_function: "Fonction", field_example: "Exemple", field_exception: "Exception",
       field_link: "Lien", no_sheet: "Ce cours n'a pas de fiche de révision.",
-      key_point: "Point clé", contents: "Sommaire",
+      key_point: "À retenir", contents: "Sommaire",
       quiz_intro: "{0} questions dans la banque de ce cours. Chaque réponse explique pourquoi, avec le passage des notes qui la justifie.",
       quiz_length: "Questions", quiz_all: "Toutes", quiz_start: "Commencer le quiz", quiz_mistakes: "Revoir mes erreurs ({0})",
       quiz_none: "Ce cours n'a pas de questions.", quiz_progress: "Question {0} sur {1}",

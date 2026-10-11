@@ -147,7 +147,9 @@
           attrs = ' id="s-' + id + '" data-sec="' + id + '"';
         }
         var tag = "h" + Math.min(6, Math.max(2, level + (opts.shift || 0)));
-        out.push("<" + tag + attrs + ">" + inline(h[2]) + "</" + tag + ">");
+        var title = inline(h[2]);
+        if (level <= 2) title = '<span class="heading-text"><span class="marker-title">' + title + "</span></span>";
+        out.push("<" + tag + attrs + ">" + title + "</" + tag + ">");
         i++;
         continue;
       }
@@ -171,7 +173,9 @@
       if (trimmed.charAt(0) === ">") {
         var quote = [];
         while (i < lines.length && lines[i].trim().charAt(0) === ">") quote.push(lines[i++].trim().replace(/^>\s?/, ""));
-        out.push('<blockquote class="keypoint">' + render(quote.join("\n"), { shift: opts.shift }) + "</blockquote>");
+        var label = window.FC && window.FC.t ? window.FC.t("key_point") : "Key point";
+        out.push('<blockquote class="keypoint"><div class="label keypoint-label">' + esc(label) + '</div>' +
+          render(quote.join("\n"), { shift: opts.shift }) + "</blockquote>");
         continue;
       }
 
