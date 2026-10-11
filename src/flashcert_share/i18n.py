@@ -14,6 +14,11 @@ STRINGS = {
         "not_found": "This course doesn't exist, or it is no longer shared.",
         "back": "All courses",
         "progress": "Your progress",
+        "palette": "Color palette",
+        "appearance": "Appearance",
+        "theme_system": "System",
+        "theme_light": "Light",
+        "theme_dark": "Dark",
         "noscript": "This page needs JavaScript to show the course.",
     },
     "fr": {
@@ -29,6 +34,11 @@ STRINGS = {
         "not_found": "Ce cours n'existe pas, ou il n'est plus partagé.",
         "back": "Tous les cours",
         "progress": "Votre progression",
+        "palette": "Palette de couleurs",
+        "appearance": "Apparence",
+        "theme_system": "Système",
+        "theme_light": "Clair",
+        "theme_dark": "Sombre",
         "noscript": "Cette page a besoin de JavaScript pour afficher le cours.",
     },
 }

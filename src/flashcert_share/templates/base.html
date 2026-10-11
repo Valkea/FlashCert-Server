@@ -7,8 +7,10 @@
   {% block meta %}{% endblock %}
   <meta name="theme-color" content="#F7F7FB" media="(prefers-color-scheme: light)">
   <meta name="theme-color" content="#0B0B13" media="(prefers-color-scheme: dark)">
-  <link rel="icon" href="{{ url_for('static', filename='icon.svg') }}" type="image/svg+xml">
+  <link rel="icon" href="{{ url_for('static', filename='icon.svg') }}?v={{ version }}" type="image/svg+xml">
   <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}?v={{ version }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='palettes.css') }}?v={{ version }}">
+  <script src="{{ url_for('static', filename='appearance.js') }}?v={{ version }}"></script>
 </head>
 <body class="{% block body_class %}{% endblock %}">
 <svg hidden xmlns="http://www.w3.org/2000/svg">
@@ -30,10 +32,34 @@
 </svg>
 <header class="topbar">
   <div class="wrap topbar-inner">
-    <a class="brand" href="{{ url_for('index') }}"><span class="brand-mark" aria-hidden="true"></span>{{ site_name }}</a>
+    <a class="brand" href="{{ url_for('index') }}">{% include "_logo.html" %}{{ site_name }}</a>
+    <div class="header-tools">
+    <label class="palette-picker" hidden id="palette-control">
+      <span class="sr-only">{{ t.palette }}</span>
+      <select id="palette-select" aria-label="{{ t.palette }}">
+        <option value="flashy">Flashy</option>
+        <option value="ink">Ink</option>
+        <option value="blue_orange">Blue / Orange</option>
+        <option value="navy_gold">Navy / Gold</option>
+        <option value="tangerine">Tangerine</option>
+        <option value="violet">Violet</option>
+        <option value="forest">Forest</option>
+        <option value="coral">Coral</option>
+        <option value="neon">Neon</option>
+      </select>
+    </label>
+    <label class="palette-picker" hidden id="theme-control">
+      <span class="sr-only">{{ t.appearance }}</span>
+      <select id="theme-select" aria-label="{{ t.appearance }}">
+        <option value="system">{{ t.theme_system }}</option>
+        <option value="light">{{ t.theme_light }}</option>
+        <option value="dark">{{ t.theme_dark }}</option>
+      </select>
+    </label>
     <button type="button" class="link-button" id="progress-open" hidden>
       <svg class="icon"><use href="#i-save"/></svg><span>{{ t.progress }}</span>
     </button>
+    </div>
   </div>
 </header>
 <main class="wrap">

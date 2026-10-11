@@ -204,6 +204,15 @@ Links don't change: share ids are copied with the courses. An external PostgreSQ
 
 ## What visitors get
 
+The web UI shares the Android app's spiral logo, Space Grotesk headings, rounded cards and pill controls.
+The header offers the same nine palettes (Flashy by default) and a System / Light / Dark appearance selector.
+System follows the browser's theme preference; explicit Light or Dark overrides it. Both choices are remembered.
+Fonts and branding assets are served locally. To refresh them from the Android checkout:
+
+```bash
+python3 tools/sync_branding.py ../FlashCert-android
+```
+
 | | |
 |---|---|
 | Notes | The course notes, with a table of contents, formulas (KaTeX, loaded only when a course has some) and a flag on each section |

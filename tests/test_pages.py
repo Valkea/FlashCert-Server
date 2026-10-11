@@ -44,6 +44,7 @@ def test_unknown_course_is_a_404_page(client):
 
 def test_static_assets(client):
     for path in ("style.css", "course.js", "md.js", "progress.js", "i18n.js", "index.js", "icon.svg",
+                 "appearance.js", "palettes.css", "logo.svg", "fonts/grotesk_bold.ttf",
                  "vendor/katex/katex.min.js", "vendor/katex/katex.min.css"):
         assert client.get(f"/static/{path}").status_code == 200, path
 
