@@ -218,7 +218,7 @@ python3 tools/sync_branding.py ../FlashCert-android
 | Notes | The course notes, with a table of contents, formulas (KaTeX, loaded only when a course has some) and a flag on each section |
 | Revision | Essentials, definitions, structure blocks (tables, steps, timelines, formulas, diagrams, rules, concepts) and "don't mix these up" |
 | Quiz | 5 / 10 / 20 / all questions from the bank: single choice, multiple choice, true/false, fill the blank, ordering. Missed and never-asked questions come first, "Retry my mistakes" replays the missed ones. Each answer shows the explanation and **Read the passage**. |
-| Cards | Flip, then "I knew it" / "Still learning"; restudy the ones still being learned |
+| Cards | Flip, then "I knew it" / "Still learning"; restudy the ones still being learned. Cards still being learned come first, then new ones, then known ones, in random order within each group. |
 | Report an error | On the course, a notes section, a sheet item, a question or a card: a message and an optional name. A hidden honeypot field and a per-IP limit keep bots out. |
 
 Progress lives under `localStorage` keys starting with `fcs:`, written only after the visitor clicks

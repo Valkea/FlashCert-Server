@@ -757,13 +757,23 @@
         h("span", { class: "meter-bar" }, h("span", { style: "width:" + (100 * known / cards.length) + "%" })),
         h("span", { class: "label", text: t("cards_stats", known, cards.length) })) : null,
       h("div", { class: "actions" },
-        button(t("cards_start"), "", function () { startDeck(cards.slice()); }),
+        button(t("cards_start"), "", function () { startDeck(cards); }),
         seenAny && learning.length && learning.length < cards.length
           ? button(t("cards_review", learning.length), "ghost", function () { startDeck(learning); }) : null)));
   }
 
+  /** Still learning first, then never seen, then known; random within each group, so one notion's cards don't follow each other. */
+  function deckOrder(list) {
+    var d = progress.load(shareId);
+    function rank(c) {
+      var s = d.c[c.id];
+      return s && !s[1] ? 0 : !s ? 1 : 2;
+    }
+    return shuffle(list.slice()).sort(function (a, b) { return rank(a) - rank(b); });
+  }
+
   function startDeck(list) {
-    deck = { list: list, i: 0, known: 0, unknown: [] };
+    deck = { list: deckOrder(list), i: 0, known: 0, unknown: [] };
     renderCard();
   }
 
