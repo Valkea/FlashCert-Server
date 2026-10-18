@@ -1,3 +1,6 @@
+from flashcert_share import db
+
+
 def share(client, auth, course):
     return client.put("/api/v1/courses/course-1", json=course, headers=auth).get_json()["share_id"]
 
@@ -64,3 +67,17 @@ def test_since_id_filter(client, auth, course):
     report(client, sid, "card", "c1")
     rows = client.get(f"/api/v1/reports?since_id={first}", headers=auth).get_json()["reports"]
     assert [r["element"]["kind"] for r in rows] == ["card"]
+
+
+def test_reports_of_one_course(client, auth, engine, course):
+    # The app's To fix list asks for the open reports of the course it shows.
+    sid = share(client, auth, course)
+    other = client.put("/api/v1/courses/course-2", json=course, headers=auth).get_json()["share_id"]
+    report(client, sid, "question", "q1")
+    report(client, other, "card", "c1")
+    rows = client.get("/api/v1/reports?status=open&course=course-1", headers=auth).get_json()["reports"]
+    assert [(r["course_uid"], r["element"]["id"]) for r in rows] == [("course-1", "q1")]
+    assert client.get("/api/v1/reports?course=nope", headers=auth).get_json()["reports"] == []
+    _, raw = db.create_token(engine)
+    stranger = {"Authorization": f"Bearer {raw}"}
+    assert client.get("/api/v1/reports?course=course-1", headers=stranger).get_json()["reports"] == []
