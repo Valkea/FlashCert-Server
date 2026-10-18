@@ -128,3 +128,32 @@ def test_list_courses_for_the_app(client, auth, course):
     assert rows[0]["uid"] == "course-1" and rows[0]["open_reports"] == 0 and len(rows[0]["hash"]) == 64
     status = client.get("/api/v1/status", headers=auth).get_json()
     assert status["courses"] == 1 and status["base_url"] == "https://share.example.com"
+
+
+def test_items_come_back_as_the_app_sent_them(client, auth, course):
+    # What the app keeps and sends: checklist ids, right options in its own order, no empty lists filled in.
+    course["questions"][0]["objective_ids"] = ["chapter:notion"]
+    course["questions"][1].update(correct=[2, 0], objective_ids=[])
+    course["questions"][3] = {"id": "q4", "type": "cloze", "q": "Exit code ＿＿＿ blocks.", "answer": "2"}
+    course["cards"][1]["objective_ids"] = ["chapter:other"]
+    put(client, auth, course)
+    content = client.get("/api/v1/courses/course-1", headers=auth).get_json()["content"]
+    assert content["questions"] == course["questions"]
+    assert content["cards"][1] == course["cards"][1]
+
+
+def test_checklist_ids_stay_out_of_the_pages(client, auth, course):
+    course["questions"][0]["objective_ids"] = ["chapter:notion"]
+    course["cards"][0]["objective_ids"] = ["chapter:notion"]
+    share_id = put(client, auth, course).get_json()["share_id"]
+    data = client.get(f"/api/public/courses/{share_id}").get_json()
+    assert all("objective_ids" not in item for item in data["questions"] + data["cards"])
+    assert b"chapter:notion" not in client.get(f"/c/{share_id}").data
+
+
+def test_malformed_checklist_ids_are_dropped(client, auth, course):
+    course["questions"][0]["objective_ids"] = "chapter:notion"
+    course["questions"][1]["objective_ids"] = ["x" * 201]
+    put(client, auth, course)
+    questions = client.get("/api/v1/courses/course-1", headers=auth).get_json()["content"]["questions"]
+    assert "objective_ids" not in questions[0] and "objective_ids" not in questions[1]

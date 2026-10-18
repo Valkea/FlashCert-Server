@@ -172,7 +172,7 @@ def create_app(config: Config | None = None, engine: Engine | None = None) -> Fl
             "certification": row.certification,
             "lang": row.lang,
             "updated_at": iso(row.updated_at),
-            **json.loads(row.content),
+            **payload.shown(json.loads(row.content)),
         }
 
     def report_out(row, uid: str | None = None) -> dict:

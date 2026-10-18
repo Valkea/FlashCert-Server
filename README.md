@@ -303,7 +303,7 @@ revision numbers and the last accepted baseline drive conflict detection.
   "sheet": { "essentiel": [], "definitions": [], "structure": [], "pieges": [] },
   "questions": [
     { "id": "q12", "type": "mcq", "q": "…", "answers": ["…", "…"], "correct": 1,
-      "explanation": "…", "notion": "…", "difficulty": 2,
+      "explanation": "…", "notion": "…", "difficulty": 2, "objective_ids": ["…"],
       "sources": [{ "section_id": "2.1", "quote": "…", "verified": true }] }
   ],
   "cards": [
@@ -315,6 +315,12 @@ revision numbers and the last accepted baseline drive conflict detection.
 * Questions and cards use the app's own JSON (`mcq`, `multi`, `true_false`, `cloze`, `order`; the older single
   `source` object is accepted). Give each a stable `id`, such as the database row id, so reports point at the
   right item across syncs. Items without one get an id from their text.
+* `objective_ids` (optional, on questions and cards) are the app's coverage checklist notions an item tests. The
+  server keeps them for the app and leaves them out of the pages; a change to them alone doesn't count as an
+  edit when deciding whether a replacement needs review.
+* A valid item comes back from `GET /api/v1/courses/{uid}` exactly as it was sent, so the app can compare its copy
+  with the server's. Older servers (0.3) filled in empty `sources`, `accept` and `bank` lists and sorted `multi`
+  answers; change reviews treat those differences as no edit.
 * `visibility` is `public`, `unlisted` or `private`. `certification`, `lang`, `position` (order inside the
   certification), `modified_at` (last edit on the device, milliseconds since the epoch), `sheet`, `questions` and
   `cards` are optional.

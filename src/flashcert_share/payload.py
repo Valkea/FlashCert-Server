@@ -16,6 +16,10 @@ Format "flashcert-share-1" (what the app sends)::
       "cards": [{"id": "c7", "front": "...", "back": "...", "sources": [...]}]
     }
 
+Questions and cards may carry "objective_ids": the app's coverage checklist notions they test. The server keeps
+them for the app and leaves them out of the pages. A valid item comes back exactly as it was sent, so the app can
+compare its copy with the server's.
+
 "flashcert-course-1" bundles (full course exports) are accepted too (transcript, analysis and costs are dropped).
 """
 
@@ -32,6 +36,7 @@ QUESTION_TYPES = ("mcq", "multi", "true_false", "cloze", "order")
 MAX_QUESTIONS = 2000
 MAX_CARDS = 5000
 MAX_SOURCES = 3
+MAX_OBJECTIVE_IDS = 50
 
 _QUESTION_KEYS = {
     "mcq": ("answers", "correct"),
@@ -41,6 +46,9 @@ _QUESTION_KEYS = {
     "order": ("items",),
 }
 _COMMON_QUESTION_KEYS = ("explanation", "notion", "difficulty")
+# The app's own bookkeeping on an item: kept for it, never shown, and an item edit when only these change isn't one.
+METADATA_KEYS = ("objective_ids",)
+HIDDEN_KEYS = ("objective_ids",)
 
 
 class PayloadError(ValueError):
@@ -92,6 +100,24 @@ def _sources(item: dict) -> list[dict]:
     return out[:MAX_SOURCES]
 
 
+def _objective_ids(item: dict) -> list[str] | None:
+    """The coverage checklist notions the item tests, as the app sent them; None when absent or malformed."""
+    ids = _strings(item.get("objective_ids"))
+    if ids is None or len(ids) > MAX_OBJECTIVE_IDS or any(len(i) > 200 for i in ids):
+        return None
+    return ids
+
+
+def _metadata(item: dict, out: dict) -> dict:
+    """Adds the item's citations, when it has a field for them, and its checklist ids."""
+    if "sources" in item or "source" in item:
+        out["sources"] = _sources(item)
+    ids = _objective_ids(item)
+    if ids is not None:
+        out["objective_ids"] = ids
+    return out
+
+
 def _item_id(raw, fallback: str, seen: set[str]) -> str:
     base = str(raw).strip()[:64] if isinstance(raw, (str, int)) and str(raw).strip() else fallback
     candidate, n = base, 2
@@ -125,7 +151,7 @@ def _question(q: dict) -> dict | None:
         if (not options or len(options) < 2 or not isinstance(correct, list) or not correct
                 or not all(isinstance(i, int) and 0 <= i < len(options) for i in correct)):
             return None
-        out.update(options=options, correct=sorted(set(correct)))
+        out.update(options=options, correct=correct)
     elif kind == "true_false":
         if not isinstance(q.get("isTrue"), bool):
             return None
@@ -134,7 +160,11 @@ def _question(q: dict) -> dict | None:
         answer = q.get("answer")
         if not isinstance(answer, str) or not answer.strip():
             return None
-        out.update(answer=answer, accept=_strings(q.get("accept")) or [], bank=_strings(q.get("bank")) or [])
+        out["answer"] = answer
+        for key in ("accept", "bank"):
+            values = _strings(q.get(key))
+            if values is not None:
+                out[key] = values
     elif kind == "order":
         items = _strings(q.get("items"))
         if not items or len(items) < 2:
@@ -144,18 +174,17 @@ def _question(q: dict) -> dict | None:
         value = q.get(key)
         if isinstance(value, (str, int)) and not isinstance(value, bool):
             out[key] = value
-    out["sources"] = _sources(q)
-    return out
+    return _metadata(q, out)
 
 
 def _card(c: dict) -> dict | None:
     front, back = c.get("front"), c.get("back")
     if not isinstance(front, str) or not isinstance(back, str) or not front.strip():
         return None
-    out = {"front": front, "back": back, "sources": _sources(c)}
+    out = {"front": front, "back": back}
     if isinstance(c.get("notion"), str):
         out["notion"] = c["notion"]
-    return out
+    return _metadata(c, out)
 
 
 def _sheet(sheet) -> dict | None:
@@ -228,6 +257,13 @@ def normalize(doc) -> tuple[dict, dict, list[str]]:
         "cards": cards,
     }
     return meta, content, warnings
+
+
+def shown(content: dict) -> dict:
+    """The content as the pages get it: without the app's checklist ids."""
+    def strip(items):
+        return [{k: v for k, v in item.items() if k not in HIDDEN_KEYS} for item in items]
+    return {**content, "questions": strip(content.get("questions", [])), "cards": strip(content.get("cards", []))}
 
 
 def content_hash(meta: dict, content: dict) -> str:

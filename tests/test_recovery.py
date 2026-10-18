@@ -129,3 +129,25 @@ def test_replacing_a_nonempty_sheet_requires_review_even_when_notes_and_counts_s
     impact = response.get_json()["changes"]
     assert impact["sheet_changed"] and impact["sheet_changed_percent"] >= 30
     assert impact["notes_changed_percent"] == 0
+
+
+def test_checklist_ids_and_older_normalization_are_not_edits():
+    from flashcert_share.changes import summarize
+    # As 0.3 stored it: empty lists filled in, right options sorted, checklist ids dropped.
+    before = {"notes": "n", "cards": [{"id": "c", "front": "f", "back": "b", "sources": []}], "questions": [
+        {"id": "m", "type": "multi", "q": "?", "options": ["a", "b", "c"], "correct": [0, 2], "sources": []},
+        {"id": "z", "type": "cloze", "q": "?", "answer": "x", "accept": [], "bank": [], "sources": []}]}
+    after = {"notes": "n", "cards": [{"id": "c", "front": "f", "back": "b", "objective_ids": ["k:1"]}], "questions": [
+        {"id": "m", "type": "multi", "q": "?", "options": ["a", "b", "c"], "correct": [2, 0], "objective_ids": ["k:1"]},
+        {"id": "z", "type": "cloze", "q": "?", "answer": "x", "objective_ids": []}]}
+    impact = summarize(before, after)
+    assert not impact["large"]
+    assert impact["questions"]["edited"] == 0 and impact["cards"]["edited"] == 0
+
+
+def test_adding_checklist_ids_to_every_question_needs_no_review(client, auth, course):
+    create(client, auth, course)
+    for q in course["questions"]:
+        q["objective_ids"] = ["chapter:" + q["id"]]
+    response = client.put("/api/v1/courses/safe", json={**course, "expected_revision": 1}, headers=auth)
+    assert response.status_code == 200 and response.get_json()["changed"]
