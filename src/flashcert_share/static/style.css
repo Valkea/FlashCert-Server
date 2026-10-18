@@ -241,7 +241,13 @@ mark { background: var(--mark); color: inherit; border-radius: 3px; padding: 0 1
   min-height: 40px; padding: 0 14px; border-radius: 999px; border: 1px solid var(--stroke);
   background: var(--surface); color: var(--text); font: inherit; font-weight: 600; cursor: pointer;
 }
-.segmented button[aria-checked="true"] { border-color: var(--accent); background: var(--accent-soft); color: var(--accent-text); }
+.segmented button[aria-checked="true"], .segmented button[aria-pressed="true"] { border-color: var(--accent); background: var(--accent-soft); color: var(--accent-text); }
+.segmented.importance { margin: 0 0 12px; }
+.segmented.importance button { min-height: 34px; padding: 0 12px; font-size: 14px; }
+/* Lines of the notes outside the chosen importance levels, at the app's opacity for disabled content. */
+.notes-body .dim { color: color-mix(in srgb, var(--text) 38%, transparent); }
+.notes-body .dim :is(strong, em, code, a, mark, .marker-title, .keypoint-label) { color: inherit; }
+.notes-body .lit { color: var(--text); }
 .history { list-style: none; padding: 0; margin: 8px 0 0; display: grid; gap: 6px; }
 .history li { display: flex; justify-content: space-between; padding: 8px 12px; border-radius: 10px; background: var(--surface); border: 1px solid var(--stroke); }
 .history li.good strong { color: var(--good); }

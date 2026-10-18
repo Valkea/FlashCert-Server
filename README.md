@@ -219,6 +219,7 @@ python3 tools/sync_branding.py ../FlashCert-android
 | Revision | Essentials, definitions, structure blocks (tables, steps, timelines, formulas, diagrams, rules, concepts) and "don't mix these up" |
 | Quiz | 5 / 10 / 20 / all questions from the bank: single choice, multiple choice, true/false, fill the blank, ordering. Missed and never-asked questions come first, "Retry my mistakes" replays the missed ones. Each answer shows the explanation and **Read the passage**. |
 | Cards | Flip, then "I knew it" / "Still learning"; restudy the ones still being learned. Cards still being learned come first, then new ones, then known ones, in random order within each group. |
+| Importance | Once the app has a checklist for the course: **All**, **Essential**, **Important**, **Details** and **Other** chips on Notes, Quiz and Cards, as in the app. From All a tap shows that level alone, further taps add or remove levels; one choice applies to the three tabs. Quiz and Cards keep the items of the chosen levels (with their counts); Notes dims the lines and key points of other levels (headings and chapters without a checklist never are). |
 | Report an error | On the course, a notes section, a sheet item, a question or a card: a message and an optional name. A hidden honeypot field and a per-IP limit keep bots out. |
 
 Progress lives under `localStorage` keys starting with `fcs:`, written only after the visitor clicks

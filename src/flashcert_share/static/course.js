@@ -84,6 +84,72 @@
     return out;
   }
 
+  // --- Importance ---------------------------------------------------------------------------------
+  // As in the app: once a course has a checklist, its questions, cards and lines of notes rank by the importance of
+  // the notions they test (3 essential, 2 important, 1 detail, 0 other). Levels are bits of a mask, so "essential
+  // and important" is a choice of chips. One choice applies to Notes, Quiz and Cards, and resets when the page opens.
+
+  var OTHER = 0, ALL = 15;
+  var LEVEL_LABELS = ["importance_other", "importance_detail", "importance_important", "importance_essential"];
+  var notions = Array.isArray(data.notions) ? data.notions : [];
+  var ranked = questions.concat(cards).some(function (x) { return typeof x.importance === "number"; });
+  var importance = ALL;
+  var onImportance = [];
+
+  function levelOf(item) {
+    return typeof item.importance === "number" ? item.importance : OTHER;
+  }
+
+  function shows(mask, level) {
+    return (mask & (1 << level)) !== 0;
+  }
+
+  /** From "all" a tap shows that level alone, otherwise it adds or removes it; none or every one offered is "all". */
+  function toggle(mask, level, offered) {
+    var next = (mask & offered) === offered ? 1 << level : mask ^ (1 << level);
+    return (next & offered) === 0 || (next & offered) === offered ? ALL : next;
+  }
+
+  /** Items of the chosen levels; every item when nothing is ranked (the notes may still offer chips). */
+  function kept(list) {
+    return importance === ALL || !ranked ? list : list.filter(function (x) { return shows(importance, levelOf(x)); });
+  }
+
+  /**
+   * "All", then a chip per level, with how many of {@code items} each holds. "Other" is offered when some items
+   * test no notion, or always for the notes (no items).
+   */
+  function importanceChips(panel, items) {
+    var counts = null;
+    if (items) {
+      counts = [0, 0, 0, 0];
+      items.forEach(function (x) { counts[levelOf(x)]++; });
+    }
+    var other = !counts || counts[OTHER] > 0;
+    var offered = other ? ALL : ALL & ~(1 << OTHER);
+    var all = (importance & offered) === offered;
+    var group = h("div", { class: "segmented importance", role: "group", "aria-label": t("importance_filter") });
+    function chip(key, label, pressed, next) {
+      group.append(h("button", {
+        type: "button", "aria-pressed": pressed ? "true" : "false", "data-level": key,
+        onclick: function () { setImportance(next, panel, key); }
+      }, label));
+    }
+    chip("all", t("importance_all"), all, ALL);
+    for (var level = 3; level >= (other ? OTHER : 1); level--) {
+      chip(String(level), t(LEVEL_LABELS[level]) + (counts ? " · " + counts[level] : ""),
+        !all && shows(importance, level), toggle(importance, level, offered));
+    }
+    return group;
+  }
+
+  function setImportance(mask, panel, key) {
+    importance = mask;
+    onImportance.forEach(function (redraw) { redraw(); });
+    var again = panels[panel].querySelector('.importance [data-level="' + key + '"]');
+    if (again) again.focus({ preventScroll: true });
+  }
+
   // --- Header -------------------------------------------------------------------------------------
 
   var meta = document.getElementById("course-meta");
@@ -167,8 +233,60 @@
     toc.append(list);
     panels.notes.append(toc);
   }
-  panels.notes.append(notesBody);
+  var notesChips = h("div");
+  panels.notes.append(notesChips, notesBody);
   md.typeset(notesBody);
+
+  var lineLevels = null;
+
+  /** Each line of a chapter with notions (a paragraph, list item, table row or key point) and its level. */
+  function rankLines() {
+    var byChapter = {};
+    notions.forEach(function (n) { (byChapter[n.chapter.trim()] = byChapter[n.chapter.trim()] || []).push(n); });
+    var out = [];
+    notesBody.querySelectorAll("h2[data-sec]").forEach(function (hd) {
+      var section = sections.filter(function (x) { return x.id === hd.dataset.sec; })[0];
+      var list = section && byChapter[section.heading.trim()];
+      if (!list) return; // a chapter without a checklist: nothing ranks its text
+      var scope = sectionScope(hd);
+      var found = md.covered(scope, list.map(function (n) { return n.quote; }));
+      scope.replaceWith.apply(scope, Array.from(scope.childNodes));
+      var levels = new Map();
+      found.nodes.forEach(function (node) {
+        var line = lineOf(node);
+        if (line && node.nodeValue.trim() && !levels.has(line)) levels.set(line, OTHER);
+      });
+      found.hits.forEach(function (nodes, i) {
+        nodes.forEach(function (node) {
+          var line = lineOf(node);
+          if (line && levels.has(line)) levels.set(line, Math.max(levels.get(line), list[i].importance));
+        });
+      });
+      levels.forEach(function (level, line) { out.push({ line: line, level: level }); });
+    });
+    return out;
+  }
+
+  /** Headings are never dimmed; a key point goes as a whole. */
+  function lineOf(node) {
+    var el = node.parentElement;
+    if (!el || el.closest("h2, h3, h4, h5, h6, .flag")) return null;
+    return el.closest("blockquote.keypoint") || el.closest("li, p, tr, dt, dd, pre, .math");
+  }
+
+  function drawNotesImportance() {
+    notesChips.textContent = "";
+    notesChips.append(importanceChips("notes", null));
+    notesBody.querySelectorAll(".dim, .lit").forEach(function (el) { el.classList.remove("dim", "lit"); });
+    if (importance === ALL) return;
+    if (!lineLevels) lineLevels = rankLines();
+    lineLevels.forEach(function (x) { x.line.classList.add(shows(importance, x.level) ? "lit" : "dim"); });
+  }
+
+  if (notions.length) {
+    drawNotesImportance();
+    onImportance.push(drawNotesImportance);
+  }
 
   function clearMarks(el) {
     el.querySelectorAll("mark").forEach(function (m) { m.replaceWith.apply(m, Array.from(m.childNodes)); });
@@ -491,12 +609,13 @@
     var out = panels.quiz;
     out.textContent = "";
     var d = progress.load(shareId);
-    var missed = questions.filter(function (q) { return d.q[q.id] && d.q[q.id][2]; });
-    var sizes = [5, 10, 20].filter(function (n) { return n < questions.length; });
-    var chosen = sizes.indexOf(10) >= 0 ? 10 : (sizes[sizes.length - 1] || questions.length);
+    var shown = kept(questions);
+    var missed = shown.filter(function (q) { return d.q[q.id] && d.q[q.id][2]; });
+    var sizes = [5, 10, 20].filter(function (n) { return n < shown.length; });
+    var chosen = sizes.indexOf(10) >= 0 ? 10 : (sizes[sizes.length - 1] || shown.length);
     var choice = h("div", { class: "segmented", role: "radiogroup", "aria-label": t("quiz_length") });
-    sizes.concat([questions.length]).forEach(function (n) {
-      var label = n === questions.length ? t("quiz_all") + " (" + n + ")" : String(n);
+    sizes.concat([shown.length]).forEach(function (n) {
+      var label = n === shown.length ? t("quiz_all") + " (" + n + ")" : String(n);
       var b = h("button", {
         type: "button", role: "radio", "aria-checked": n === chosen ? "true" : "false",
         onclick: function () {
@@ -506,12 +625,14 @@
       }, label);
       choice.append(b);
     });
-    var intro = h("div", { class: "card intro" },
-      h("p", { text: t("quiz_intro", questions.length) }),
+    var intro = shown.length ? h("div", { class: "card intro" },
+      ranked ? importanceChips("quiz", questions) : null,
+      h("p", { text: t("quiz_intro", shown.length) }),
       h("p", { class: "label", text: t("quiz_length") }), choice,
       h("div", { class: "actions" },
         button(t("quiz_start"), "", function () { startQuiz(pick(chosen, false)); }),
-        missed.length ? button(t("quiz_mistakes", missed.length), "ghost", function () { startQuiz(pick(missed.length, true)); }) : null));
+        missed.length ? button(t("quiz_mistakes", missed.length), "ghost", function () { startQuiz(pick(missed.length, true)); }) : null))
+      : h("div", { class: "card intro" }, importanceChips("quiz", questions), h("p", { class: "hint", text: t("importance_none") }));
     out.append(intro);
     if (d.quizzes.length) {
       var hist = h("ol", { class: "history" });
@@ -532,7 +653,7 @@
       var s = d.q[q.id];
       return s && s[2] ? 0 : !s ? 1 : 2;
     }
-    var pool = shuffle(questions.filter(function (q) { return !onlyMissed || rank(q) === 0; }));
+    var pool = shuffle(kept(questions).filter(function (q) { return !onlyMissed || rank(q) === 0; }));
     pool.sort(function (a, b) { return rank(a) - rank(b); });
     return shuffle(pool.slice(0, n));
   }
@@ -738,7 +859,10 @@
     out.append(h("h3", { class: "label", text: t("quiz_review") }), list);
   }
 
-  if (available.quiz) quizSetup();
+  if (available.quiz) {
+    quizSetup();
+    if (ranked) onImportance.push(function () { if (!quiz) quizSetup(); });
+  }
 
   // --- Flashcards ---------------------------------------------------------------------------------
 
@@ -748,17 +872,24 @@
     var out = panels.cards;
     out.textContent = "";
     var d = progress.load(shareId);
-    var known = cards.filter(function (c) { return d.c[c.id] && d.c[c.id][1]; }).length;
-    var learning = cards.filter(function (c) { return !(d.c[c.id] && d.c[c.id][1]); });
-    var seenAny = cards.some(function (c) { return d.c[c.id]; });
+    var shown = kept(cards);
+    var chips = ranked ? importanceChips("cards", cards) : null;
+    if (!shown.length) {
+      out.append(h("div", { class: "card intro" }, chips, h("p", { class: "hint", text: t("importance_none") })));
+      return;
+    }
+    var known = shown.filter(function (c) { return d.c[c.id] && d.c[c.id][1]; }).length;
+    var learning = shown.filter(function (c) { return !(d.c[c.id] && d.c[c.id][1]); });
+    var seenAny = shown.some(function (c) { return d.c[c.id]; });
     out.append(h("div", { class: "card intro" },
-      h("p", { text: t("cards_intro", cards.length) }),
+      chips,
+      h("p", { text: t("cards_intro", shown.length) }),
       seenAny ? h("div", { class: "meter" },
-        h("span", { class: "meter-bar" }, h("span", { style: "width:" + (100 * known / cards.length) + "%" })),
-        h("span", { class: "label", text: t("cards_stats", known, cards.length) })) : null,
+        h("span", { class: "meter-bar" }, h("span", { style: "width:" + (100 * known / shown.length) + "%" })),
+        h("span", { class: "label", text: t("cards_stats", known, shown.length) })) : null,
       h("div", { class: "actions" },
-        button(t("cards_start"), "", function () { startDeck(cards); }),
-        seenAny && learning.length && learning.length < cards.length
+        button(t("cards_start"), "", function () { startDeck(shown); }),
+        seenAny && learning.length && learning.length < shown.length
           ? button(t("cards_review", learning.length), "ghost", function () { startDeck(learning); }) : null)));
   }
 
@@ -828,7 +959,10 @@
         button(t("cards_restart"), again.length ? "ghost" : "", function () { deck = null; cardsSetup(); }))));
   }
 
-  if (available.cards) cardsSetup();
+  if (available.cards) {
+    cardsSetup();
+    if (ranked) onImportance.push(function () { if (!deck) cardsSetup(); });
+  }
 
   // Refresh the start screens when progress is turned on or erased.
   progress.onChange(function (id) {

@@ -303,10 +303,8 @@
     return cited ? { section: cited, found: false } : null;
   }
 
-  /** Wraps the quote in <mark> inside an already rendered element. Returns the first mark, or null. */
-  function highlight(root, quote) {
-    var q = fold(quote || "").replace(/\s+/g, " ").trim();
-    if (!q) return null;
+  /** The text nodes of a rendered element (formulas aside), each with where it starts in their joined text. */
+  function textNodes(root) {
     var walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
       acceptNode: function (n) {
         return n.parentElement && n.parentElement.closest(".katex") ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT;
@@ -320,11 +318,43 @@
       // A space between nodes, so words from separate cells or items don't merge.
       text += n.nodeValue + " ";
     }
-    var f = folded(text);
+    return { nodes: nodes, text: text, folded: null };
+  }
+
+  /** [from, to) of the first occurrence of the quote in textNodes' joined text, or null. */
+  function span(t, quote) {
+    var q = fold(quote || "").replace(/\s+/g, " ").trim();
+    if (!q) return null;
+    var f = t.folded || (t.folded = folded(t.text));
     var idx = f.norm.indexOf(q);
     if (idx < 0) return null;
-    var from = f.map[idx];
-    var to = f.map[Math.min(idx + q.length - 1, f.map.length - 1)] + 1;
+    return [f.map[idx], f.map[Math.min(idx + q.length - 1, f.map.length - 1)] + 1];
+  }
+
+  /**
+   * For each quote, the text nodes of a rendered element it covers (none when it isn't there), plus every text node.
+   * The notes use it to rank their lines by the notions they hold.
+   */
+  function covered(root, quotes) {
+    var t = textNodes(root);
+    return {
+      nodes: t.nodes.map(function (e) { return e.node; }),
+      hits: quotes.map(function (quote) {
+        var at = span(t, quote);
+        return !at ? [] : t.nodes.filter(function (e) {
+          return e.start < at[1] && at[0] < e.start + e.node.nodeValue.length;
+        }).map(function (e) { return e.node; });
+      })
+    };
+  }
+
+  /** Wraps the quote in <mark> inside an already rendered element. Returns the first mark, or null. */
+  function highlight(root, quote) {
+    var t = textNodes(root);
+    var nodes = t.nodes;
+    var at = span(t, quote);
+    if (!at) return null;
+    var from = at[0], to = at[1];
     var first = null;
     nodes.forEach(function (e) {
       var len = e.node.nodeValue.length;
@@ -377,6 +407,6 @@
   window.FC = window.FC || {};
   window.FC.md = {
     esc: esc, inline: inline, render: render, sections: sections, find: find, locate: locate,
-    highlight: highlight, typeset: typeset
+    highlight: highlight, covered: covered, typeset: typeset
   };
 })();
