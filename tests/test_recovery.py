@@ -151,3 +151,12 @@ def test_adding_checklist_ids_to_every_question_needs_no_review(client, auth, co
         q["objective_ids"] = ["chapter:" + q["id"]]
     response = client.put("/api/v1/courses/safe", json={**course, "expected_revision": 1}, headers=auth)
     assert response.status_code == 200 and response.get_json()["changed"]
+
+
+def test_a_new_checklist_needs_no_review(client, auth, course):
+    create(client, auth, course)
+    for i, q in enumerate(course["questions"]):
+        q["importance"] = i % 4
+    course["notions"] = [{"chapter": "Guardrails", "quote": "Least privilege", "importance": 2}]
+    response = client.put("/api/v1/courses/safe", json={**course, "expected_revision": 1}, headers=auth)
+    assert response.status_code == 200 and response.get_json()["changed"]

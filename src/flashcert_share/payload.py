@@ -13,12 +13,15 @@ Format "flashcert-share-1" (what the app sends)::
       "notes": "## Section\\n...",              # Markdown
       "sheet": {...},                           # optional revision sheet
       "questions": [{"id": "q12", "type": "mcq", "q": "...", ...}],
-      "cards": [{"id": "c7", "front": "...", "back": "...", "sources": [...]}]
+      "cards": [{"id": "c7", "front": "...", "back": "...", "sources": [...]}],
+      "notions": [{"chapter": "Section", "quote": "...", "importance": 3}]   # optional
     }
 
 Questions and cards may carry "objective_ids": the app's coverage checklist notions they test. The server keeps
-them for the app and leaves them out of the pages. A valid item comes back exactly as it was sent, so the app can
-compare its copy with the server's.
+them for the app and leaves them out of the pages. With a checklist, they also carry "importance": the highest
+level of the notions they test, 3 essential, 2 important, 1 detail, 0 none. "notions" lists the checklist's
+notions by "##" chapter heading, with a quote of the notes, so the pages can dim the lines of other levels.
+A valid item comes back exactly as it was sent, so the app can compare its copy with the server's.
 
 "flashcert-course-1" bundles (full course exports) are accepted too (transcript, analysis and costs are dropped).
 """
@@ -37,6 +40,8 @@ MAX_QUESTIONS = 2000
 MAX_CARDS = 5000
 MAX_SOURCES = 3
 MAX_OBJECTIVE_IDS = 50
+MAX_NOTIONS = 5000
+IMPORTANCE_LEVELS = (0, 1, 2, 3)
 
 _QUESTION_KEYS = {
     "mcq": ("answers", "correct"),
@@ -47,7 +52,7 @@ _QUESTION_KEYS = {
 }
 _COMMON_QUESTION_KEYS = ("explanation", "notion", "difficulty")
 # The app's own bookkeeping on an item: kept for it, never shown, and an item edit when only these change isn't one.
-METADATA_KEYS = ("objective_ids",)
+METADATA_KEYS = ("objective_ids", "importance")
 HIDDEN_KEYS = ("objective_ids",)
 
 
@@ -109,12 +114,15 @@ def _objective_ids(item: dict) -> list[str] | None:
 
 
 def _metadata(item: dict, out: dict) -> dict:
-    """Adds the item's citations, when it has a field for them, and its checklist ids."""
+    """Adds the item's citations, when it has a field for them, its checklist ids and its importance."""
     if "sources" in item or "source" in item:
         out["sources"] = _sources(item)
     ids = _objective_ids(item)
     if ids is not None:
         out["objective_ids"] = ids
+    level = item.get("importance")
+    if type(level) is int and level in IMPORTANCE_LEVELS:
+        out["importance"] = level
     return out
 
 
@@ -187,6 +195,27 @@ def _card(c: dict) -> dict | None:
     return _metadata(c, out)
 
 
+def _notions(raw, warnings: list[str]) -> list[dict] | None:
+    """The checklist notions by chapter, for the notes; None when the app sent none."""
+    if raw is None:
+        return None
+    if not isinstance(raw, list):
+        raise PayloadError("notions must be an array")
+    if len(raw) > MAX_NOTIONS:
+        raise PayloadError(f"at most {MAX_NOTIONS} notions")
+    out = []
+    for i, n in enumerate(raw):
+        chapter = n.get("chapter") if isinstance(n, dict) else None
+        quote = n.get("quote") if isinstance(n, dict) else None
+        level = n.get("importance") if isinstance(n, dict) else None
+        if (not isinstance(chapter, str) or not chapter.strip() or len(chapter) > 300 or not isinstance(quote, str)
+                or not quote.strip() or len(quote) > 1000 or type(level) is not int or level not in IMPORTANCE_LEVELS[1:]):
+            warnings.append(f"notion {i + 1} skipped: chapter, quote or importance missing")
+            continue
+        out.append({"chapter": chapter, "quote": quote, "importance": level})
+    return out
+
+
 def _sheet(sheet) -> dict | None:
     if sheet is None:
         return None
@@ -256,6 +285,9 @@ def normalize(doc) -> tuple[dict, dict, list[str]]:
         "questions": questions,
         "cards": cards,
     }
+    notions = _notions(doc.get("notions"), warnings)
+    if notions is not None:
+        content["notions"] = notions
     return meta, content, warnings
 
 

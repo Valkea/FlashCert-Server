@@ -303,12 +303,13 @@ revision numbers and the last accepted baseline drive conflict detection.
   "sheet": { "essentiel": [], "definitions": [], "structure": [], "pieges": [] },
   "questions": [
     { "id": "q12", "type": "mcq", "q": "…", "answers": ["…", "…"], "correct": 1,
-      "explanation": "…", "notion": "…", "difficulty": 2, "objective_ids": ["…"],
+      "explanation": "…", "notion": "…", "difficulty": 2, "objective_ids": ["…"], "importance": 3,
       "sources": [{ "section_id": "2.1", "quote": "…", "verified": true }] }
   ],
   "cards": [
     { "id": "c7", "front": "…", "back": "…", "notion": "…", "sources": [{ "section_id": "1.1", "quote": "…" }] }
-  ]
+  ],
+  "notions": [{ "chapter": "Section", "quote": "…", "importance": 3 }]
 }
 ```
 
@@ -318,6 +319,11 @@ revision numbers and the last accepted baseline drive conflict detection.
 * `objective_ids` (optional, on questions and cards) are the app's coverage checklist notions an item tests. The
   server keeps them for the app and leaves them out of the pages; a change to them alone doesn't count as an
   edit when deciding whether a replacement needs review.
+* `importance` (optional, on questions and cards) is the highest level of the checklist notions an item tests:
+  `3` essential, `2` important, `1` detail, `0` none. `notions` (optional) lists the checklist's notions with the
+  `##` chapter heading they belong to, a `quote` of the notes and their `importance` (`1`–`3`). The app sends
+  both once a course has a checklist; the pages then filter by importance. Like `objective_ids`, a change to
+  them alone isn't an edit for review.
 * A valid item comes back from `GET /api/v1/courses/{uid}` exactly as it was sent, so the app can compare its copy
   with the server's. Older servers (0.3) filled in empty `sources`, `accept` and `bank` lists and sorted `multi`
   answers; change reviews treat those differences as no edit.

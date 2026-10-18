@@ -157,3 +157,36 @@ def test_malformed_checklist_ids_are_dropped(client, auth, course):
     put(client, auth, course)
     questions = client.get("/api/v1/courses/course-1", headers=auth).get_json()["content"]["questions"]
     assert "objective_ids" not in questions[0] and "objective_ids" not in questions[1]
+
+
+def test_importance_and_notions_reach_the_pages(client, auth, course):
+    course["questions"][0]["importance"] = 3
+    course["questions"][1]["importance"] = 0
+    course["cards"][0]["importance"] = 1
+    course["notions"] = [{"chapter": "Guardrails", "quote": "denies or gates a dangerous action", "importance": 3}]
+    share_id = put(client, auth, course).get_json()["share_id"]
+    stored = client.get("/api/v1/courses/course-1", headers=auth).get_json()["content"]
+    assert stored["questions"][:2] == course["questions"][:2] and stored["notions"] == course["notions"]
+    data = client.get(f"/api/public/courses/{share_id}").get_json()
+    assert [q.get("importance") for q in data["questions"]] == [3, 0, None, None, None]
+    assert data["cards"][0]["importance"] == 1 and data["notions"] == course["notions"]
+
+
+def test_invalid_importance_and_notions_are_dropped(client, auth, course):
+    course["questions"][0]["importance"] = 4
+    course["questions"][1]["importance"] = True
+    course["notions"] = [{"chapter": "Guardrails", "quote": "x", "importance": 0}, {"chapter": "", "quote": "x", "importance": 2},
+                         "nope", {"chapter": "Guardrails", "quote": "Least privilege", "importance": 2}]
+    body = put(client, auth, course).get_json()
+    assert len(body["warnings"]) == 3
+    content = client.get("/api/v1/courses/course-1", headers=auth).get_json()["content"]
+    assert "importance" not in content["questions"][0] and "importance" not in content["questions"][1]
+    assert content["notions"] == [{"chapter": "Guardrails", "quote": "Least privilege", "importance": 2}]
+    assert put(client, auth, {**course, "notions": {"a": 1}}).status_code == 422
+
+
+def test_a_course_without_notions_keeps_its_hash(client, auth, course):
+    first = put(client, auth, course).get_json()
+    assert "notions" not in client.get("/api/v1/courses/course-1", headers=auth).get_json()["content"]
+    assert not put(client, auth, course).get_json()["changed"]
+    assert put(client, auth, {**course, "notions": []}).get_json()["hash"] != first["hash"]
