@@ -690,7 +690,10 @@ def join(engine: Engine, token_id: int | None, label: str, *, code: str | None =
                 raise InviteInvalid(code)
             role, via, course_id, collection_id = inv.role, "invite", inv.course_id, inv.collection_id
         if course_id is not None:
-            owner = conn.execute(select(course.c.owner_id).where(course.c.id == course_id)).scalar_one()
+            row = conn.execute(select(course.c.owner_id, course.c.deleted_at).where(course.c.id == course_id)).one()
+            if row.deleted_at is not None:
+                raise InviteInvalid(code or "")
+            owner = row.owner_id
         else:
             owner = conn.execute(select(collection.c.owner_id).where(collection.c.id == collection_id)).scalar_one()
         if token_id is not None and token_id == owner:

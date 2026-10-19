@@ -258,6 +258,18 @@ def test_joins_are_rate_limited_and_invites_can_be_turned_off(tmp_path, course):
     assert join(client, {"course": sid}).status_code == 429
 
 
+def test_an_invite_to_a_deleted_course_is_not_used_up(client, engine, course):
+    _, alice = owner(engine)
+    first = put(client, alice, course).get_json()
+    inv = invite(client, alice, course="course-1")
+    rev = first["revision"]
+    client.delete(f"/api/v1/courses/course-1?reason=deleted&expected_revision={rev}&confirmation=delete-{rev}-deleted",
+                  headers=alice)
+    assert join(client, {"code": inv["code"]}).status_code == 404
+    with engine.connect() as conn:
+        assert conn.execute(select(db.invite.c.uses_left)).scalar_one() == 1
+
+
 def test_invites_expire_and_can_be_revoked(client, engine, course):
     _, alice = owner(engine)
     put(client, alice, course)
