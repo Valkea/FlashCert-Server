@@ -565,6 +565,17 @@ def create_app(config: Config | None = None, engine: Engine | None = None) -> Fl
                 "history_limit": cfg.history_limit, "trash_days": cfg.trash_days,
                 "notes_change_percent": cfg.notes_change_percent, "items_change_percent": cfg.items_change_percent}
 
+    @app.patch("/api/v1/me")
+    @require_token
+    def api_rename():
+        """{name}: what other people see for this token, as the owner of what it shares, as a member and as the
+        author of changes."""
+        name = json_body().get("name")
+        if not isinstance(name, str) or not 0 < len(name.strip()) <= 100:
+            return api_error(400, "name must be 1 to 100 characters")
+        db.rename_token(engine, g.token_id, name.strip())
+        return {"token_id": g.token_id, "name": name.strip()}
+
     @app.get("/api/v1/courses")
     @require_token
     def api_courses():

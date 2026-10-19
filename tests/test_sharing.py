@@ -320,3 +320,42 @@ def test_revisions_remember_their_author(client, engine, course):
         assert conn.execute(select(db.course_revision.c.token_id)).scalar_one() == alice_id
         snapshot = json.loads(conn.execute(select(db.course_revision.c.snapshot)).scalar_one())
     assert snapshot["link_actions"] is None
+
+
+def test_people_choose_the_name_others_see(tmp_path, capsys, course):
+    url = f"sqlite:///{tmp_path / 'cli.db'}"
+    app = create_app(Config(database_url=url, public_url="https://share.example.com", proxies=0))
+    client, engine = app.test_client(), app.extensions["flashcert"]["engine"]
+    alice_id, alice = owner(engine, label="pixel")
+    put(client, alice, {**course, "visibility": "private"})
+    r = client.patch("/api/v1/me", json={"name": "  Alice Martin "}, headers=alice)
+    assert r.status_code == 200 and r.get_json() == {"token_id": alice_id, "name": "Alice Martin"}
+    for bad in ({"name": "   "}, {"name": "x" * 101}, {"name": 3}, {}):
+        assert client.patch("/api/v1/me", json=bad, headers=alice).status_code == 400
+    assert client.patch("/api/v1/me", json={"name": "Eve"}).status_code == 401
+
+    # The owner's name on the invite and on the course it shares.
+    code = invite(client, alice, course="course-1")["code"]
+    assert client.get(f"/api/public/invites/{code}").get_json()["owner"] == "Alice Martin"
+    bob = guest(join(client, {"code": code, "name": "bob"}))
+    [shared] = client.get("/api/v1/courses", headers=bob).get_json()["courses"]
+    assert shared["owner"] == "Alice Martin"
+
+    # A member's name: joining again with a name renames the token, and so does the app's setting.
+    code = invite(client, alice, course="course-1", role="editor")["code"]
+    assert join(client, {"code": code, "name": "Bob Durand"}, bob).status_code == 200
+
+    def member():
+        [m] = client.get("/api/v1/members?course=course-1", headers=alice).get_json()["members"]
+        return m["label"]
+
+    assert member() == "Bob Durand"
+    client.patch("/api/v1/me", json={"name": "Robert"}, headers=bob)
+    assert member() == "Robert" and client.get("/api/v1/status", headers=bob).get_json()["token"] == "Robert"
+    # Without a name, joining keeps it.
+    code = invite(client, alice, course="course-1")["code"]
+    assert join(client, {"code": code}, bob).status_code == 200 and member() == "Robert"
+
+    cli.main(["--database-url", url, "token", "rename", str(alice_id), "--label", "Alice"])
+    assert "Renamed" in capsys.readouterr().out
+    assert client.get("/api/v1/courses", headers=bob).get_json()["courses"][0]["owner"] == "Alice"

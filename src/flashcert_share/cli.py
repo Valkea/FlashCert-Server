@@ -1,8 +1,9 @@
 """Command line: run the server and manage tokens, courses and reports.
 
     flashcert-share serve [--host 127.0.0.1] [--port 8080]
-    flashcert-share token create [--label phone]     # prints the token once
+    flashcert-share token create [--label alice]     # prints the token once
     flashcert-share token list | token revoke ID | token promote ID   # promote: a guest may back up courses
+    flashcert-share token rename ID --label NAME     # the name people sharing with this token see
     flashcert-share courses                          # what is shared, with links and owners
     flashcert-share owner TOKEN_ID UID… | --from ID | --unowned   # who may change and download courses
     flashcert-share import bundle.json [--uid X]     # share a course file without the app
@@ -96,6 +97,12 @@ def cmd_token(cfg: Config, args) -> None:
         if not db.promote_token(engine, args.id):
             sys.exit("No such guest token.")
         print("Promoted: this token may now back up courses of its own.")
+    elif args.action == "rename":
+        if args.id is None or not (args.label or "").strip():
+            sys.exit("token rename needs a token id and --label NAME")
+        if not db.rename_token(engine, args.id, args.label.strip()):
+            sys.exit("No such token.")
+        print("Renamed. The people it shares with see this name; the app changes it from its settings too.")
 
 
 def _link(cfg: Config, share_id: str) -> str:
@@ -220,9 +227,9 @@ def main(argv: list[str] | None = None) -> None:
     p.set_defaults(func=cmd_serve)
 
     p = sub.add_parser("token", help="manage the app's sync tokens")
-    p.add_argument("action", choices=("create", "list", "revoke", "promote"))
+    p.add_argument("action", choices=("create", "list", "revoke", "promote", "rename"))
     p.add_argument("id", nargs="?", type=int)
-    p.add_argument("--label", help="a name to recognise the token, e.g. 'pixel'")
+    p.add_argument("--label", help="the person's name, shown to the people they share with, e.g. 'alice'")
     p.set_defaults(func=cmd_token)
 
     p = sub.add_parser("courses", help="list shared courses")

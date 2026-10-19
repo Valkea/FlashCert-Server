@@ -300,6 +300,12 @@ def promote_token(engine: Engine, token_id: int) -> bool:
                             .values(kind="user")).rowcount > 0
 
 
+def rename_token(engine: Engine, token_id: int, label: str) -> bool:
+    """The name other people see for this token: as the owner of what it shares, as a member, as an author."""
+    with engine.begin() as conn:
+        return conn.execute(token.update().where(token.c.id == token_id).values(label=label[:100])).rowcount > 0
+
+
 def check_token(engine: Engine, raw: str) -> int | None:
     """The id of the token, or None when it is unknown or revoked."""
     if not raw:
@@ -679,8 +685,8 @@ class InviteInvalid(Exception):
 def join(engine: Engine, token_id: int | None, label: str, *, code: str | None = None, course_id: int | None = None,
          collection_id: int | None = None) -> tuple[int, str | None, int | None]:
     """Gives access through an invite code, or as a viewer through a shared link (``course_id``/``collection_id``,
-    checked by the caller). Without ``token_id`` a guest token is made. Returns (token id, new raw token or None,
-    membership id; None when the token already owns what it joined)."""
+    checked by the caller). Without ``token_id`` a guest token is made; with one, a ``label`` renames it. Returns
+    (token id, new raw token or None, membership id; None when the token already owns what it joined)."""
     with engine.begin() as conn:
         role, via = "viewer", "link"
         if code is not None:
@@ -706,6 +712,8 @@ def join(engine: Engine, token_id: int | None, label: str, *, code: str | None =
         raw = None
         if token_id is None:
             token_id, raw = _new_token(conn, label or "guest", "guest")
+        elif label:
+            conn.execute(token.update().where(token.c.id == token_id).values(label=label[:100]))
         membership_id = grant(conn, token_id, role, via, course_id, collection_id)
         return token_id, raw, membership_id
 

@@ -38,7 +38,7 @@ curl -fsSL https://raw.githubusercontent.com/Valkea/FlashCert-Server/main/.env.e
 
 ```bash
 docker compose up -d
-docker compose exec share flashcert-share token create --label phone   # prints the token, once
+docker compose exec share flashcert-share token create --label alice   # prints the token, once
 ```
 
 **4. Put it behind HTTPS.** The container listens on `127.0.0.1:8080` of the host only. Point your domain at it
@@ -106,7 +106,8 @@ docker compose exec share flashcert-share token create --label alice
 ```
 
 Each person enters the server address and their token in their app. Everyone's public courses appear together on
-the home page.
+the home page. The label is the name the people they share with see: the app replaces it with the name set in its
+settings, and `token rename ID --label NAME` changes it here.
 
 **Each token owns its courses.** A course belongs to the token that first sent it. Only that token sees it in the
 sync API, changes it, downloads it, deletes it and reads its error reports; for another token it doesn't exist.
@@ -148,6 +149,9 @@ server gets the access on their token; anyone else gets a new guest token.
   link, or moved out of the certification), the member's devices are told the course is `revoked` and keep their
   copy, detached.
 * Study progress never leaves anyone's phone: each person keeps theirs on a shared course.
+* People appear under their token's label: the owner on invites and shared courses, members in the owner's list,
+  editors in the history. The app sends the name set in its settings (`PATCH /api/v1/me`); a guest token starts
+  with the name given when joining.
 
 ## Your data
 
@@ -216,6 +220,7 @@ Inside the container: `docker compose exec share flashcert-share …`
 
 ```
 flashcert-share token create [--label NAME] | token list | token revoke ID | token promote ID
+flashcert-share token rename ID --label NAME   the name the people sharing with this token see
 flashcert-share courses                    courses with their links and owners
 flashcert-share owner TOKEN_ID UID… | --from TOKEN_ID | --unowned   give courses to a token
 flashcert-share import FILE [--uid X] [--certification NAME] [--unlisted] [--owner TOKEN_ID]
@@ -330,6 +335,7 @@ owner's `visibility`, `certification` and `position`. A guest token's `PUT` of a
 
 | | |
 |---|---|
+| `PATCH /api/v1/me` | `{name}` (1–100 characters): this token's label, the name other people see |
 | `PATCH /api/v1/courses/{uid}` | also `{link_actions: [..] \| null}` (the owner) |
 | `POST /api/v1/invites` | `{course: uid \| certification: name, role: viewer\|editor, uses: 1, days: 7}` (0 days: no expiry) → `{id, code, url, …}`; the code is shown once |
 | `GET /api/v1/invites`, `DELETE /api/v1/invites/{id}` | the owner's usable invites; revoke one |
@@ -412,8 +418,8 @@ paused mode applies none. A stale preview must be refreshed, including when a se
 `server: {name, url}`, with an `ETag` (`If-None-Match` answers 304). `GET /api/public/certifications/{share_id}`
 lists a shared certification's courses the same way. `GET /api/public/invites/{code}` previews an invite without
 using it. `POST /api/public/join` takes `{code}`, `{course: share_id}` or `{certification: share_id}` and an
-optional `name`; with a bearer token the access goes to that token, otherwise the answer carries a new guest
-`token`, once (201).
+optional `name`; with a bearer token the access goes to that token (and `name` renames it), otherwise the answer
+carries a new guest `token` labelled with `name`, once (201).
 
 `GET /api/public/courses`, `GET /api/public/courses/{share_id}` (what the pages use; private courses answer 404) and
 `POST /api/public/courses/{share_id}/reports` with
