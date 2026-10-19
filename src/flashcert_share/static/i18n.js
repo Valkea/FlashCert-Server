@@ -39,6 +39,7 @@
       importance_none: "Nothing at these levels of importance.",
       // Sources
       read_passage: "Read the passage", passage_eyebrow: "From the notes", passage_open_notes: "Show in the notes",
+      back_to_quiz: "Back to the quiz", back_to_cards: "Back to the cards",
       passage_back: "Back", passage_not_found: "The exact sentence couldn't be found; here is the section it comes from.",
       close: "Close",
       // Reports
@@ -96,6 +97,7 @@
       importance_important: "Important", importance_detail: "Détails", importance_other: "Autre",
       importance_none: "Rien à ces niveaux d'importance.",
       read_passage: "Lire le passage", passage_eyebrow: "Extrait des notes", passage_open_notes: "Voir dans les notes",
+      back_to_quiz: "Retour au quiz", back_to_cards: "Retour aux cartes",
       passage_back: "Retour", passage_not_found: "La phrase exacte est introuvable ; voici la section d'où elle vient.",
       close: "Fermer",
       report_title: "Signaler une erreur", report_message: "Qu'est-ce qui ne va pas ?", report_name: "Votre nom (facultatif)",

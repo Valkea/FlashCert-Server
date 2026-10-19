@@ -396,6 +396,12 @@ h3.label { margin: 28px 0 8px; }
   .sheet-dialog { width: 100%; max-width: none; margin: auto 0 0; border-radius: 28px 28px 0 0; max-height: 88vh; }
 }
 
+.back-to {
+  position: fixed; right: 16px; bottom: 16px; z-index: 25;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.25);
+}
+body:has(.save-banner) .back-to { bottom: 76px; }
+
 .save-banner {
   position: fixed; left: 50%; bottom: 16px; transform: translateX(-50%); z-index: 30;
   display: flex; align-items: center; gap: 10px; width: max-content; max-width: calc(100% - 24px);

@@ -194,6 +194,11 @@
 
   function select(name, push) {
     if (!available[name]) name = "notes";
+    var back = returnTo && returnTo.tab === name ? returnTo : null;
+    if (name !== "notes") {
+      returnTo = null;
+      returnBtn.hidden = true;
+    }
     current = name;
     tabs.forEach(function (b) {
       var on = b.dataset.tab === name;
@@ -202,7 +207,18 @@
     });
     Object.keys(panels).forEach(function (k) { panels[k].hidden = k !== name; });
     if (push !== false) history.replaceState(null, "", "#" + name);
+    if (back) requestAnimationFrame(function () { window.scrollTo(0, back.y); });
   }
+
+  // A quiz or a deck under way stays put while its passage is read in the notes: Back, or this button, returns to
+  // it where it was left.
+  var returnTo = null;
+  var returnBtn = button("", "back-to", function () {
+    if (history.state && history.state.returnTo) history.back();
+    else if (returnTo) select(returnTo.tab);
+  }, "back");
+  returnBtn.hidden = true;
+  document.body.append(returnBtn);
 
   tabs.forEach(function (b, i) {
     b.hidden = !available[b.dataset.tab];
@@ -295,7 +311,16 @@
 
   /** Opens the notes on a section, with the quote highlighted when given. */
   function showInNotes(sectionId, quote) {
-    select("notes");
+    var from = current === "quiz" && quiz || current === "cards" && deck ? current : null;
+    if (from) {
+      returnTo = { tab: from, y: window.scrollY };
+      history.pushState({ returnTo: from }, "", "#notes");
+      select("notes", false);
+      returnBtn.lastChild.textContent = t(from === "quiz" ? "back_to_quiz" : "back_to_cards");
+      returnBtn.hidden = false;
+    } else {
+      select("notes");
+    }
     clearMarks(notesBody);
     var target = document.getElementById("s-" + sectionId);
     var mark = null;
@@ -1061,5 +1086,6 @@
     select(panels[hash] ? hash : (current || "notes"), false);
   }
   window.addEventListener("hashchange", fromHash);
+  window.addEventListener("popstate", fromHash);
   fromHash();
 })();
