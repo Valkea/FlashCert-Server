@@ -207,6 +207,7 @@
   // --- Notes index (port of the app's NotesIndex) -------------------------------------------------
 
   var SECTION_HEADING = /^(#{2,3})\s+(.+?)\s*#*\s*$/;
+  var NON_WORD = /[^\p{L}\p{N}]+/gu;
 
   function sections(markdown) {
     var lines = String(markdown || "").replace(/\r\n?/g, "\n").split("\n");
@@ -300,7 +301,27 @@
     var hit = all.filter(function (s) { return s.level === 3 && find(s.fullBody, quote); })[0] ||
       all.filter(function (s) { return find(s.fullBody, quote); })[0];
     if (hit) return { section: hit, found: true };
-    return cited ? { section: cited, found: false } : null;
+    if (cited) return { section: cited, found: false };
+    // Neither: the section holding most of the quote's words, when it holds at least half of them.
+    var best = null, bestScore = 0;
+    all.forEach(function (s) {
+      var score = overlap(s.fullBody, quote);
+      if (score > bestScore) { bestScore = score; best = s; }
+    });
+    return best && bestScore >= 0.5 ? { section: best, found: false } : null;
+  }
+
+  function overlap(text, quote) {
+    if (!quote || !String(quote).trim()) return 0;
+    var t = " " + fold(text).replace(NON_WORD, " ") + " ";
+    var words = fold(quote).replace(NON_WORD, " ").trim().split(" ");
+    var hit = 0, total = 0;
+    words.forEach(function (w) {
+      if (w.length < 3) return;
+      total++;
+      if (t.indexOf(" " + w + " ") >= 0) hit++;
+    });
+    return total ? hit / total : 0;
   }
 
   /** The text nodes of a rendered element (formulas aside), each with where it starts in their joined text. */

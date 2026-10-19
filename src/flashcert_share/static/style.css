@@ -258,6 +258,11 @@ h3.label { margin: 28px 0 8px; }
 .progressbar { height: 6px; background: var(--surface-alt); border-radius: 999px; overflow: hidden; margin-bottom: 16px; }
 .progressbar span { display: block; height: 100%; background: var(--accent); border-radius: 999px; transition: width 0.3s; }
 .question-top { display: flex; justify-content: space-between; align-items: flex-start; gap: 8px; }
+.question-main { flex: 1; min-width: 0; }
+.place {
+  display: table; margin-bottom: 8px; padding: 4px 10px; border-radius: 10px;
+  background: var(--accent-soft); color: var(--accent-text); font-size: 13px; font-weight: 600; line-height: 1.4;
+}
 .stem { font-size: 18px; font-weight: 600; line-height: 1.5; margin-bottom: 16px; }
 .blank {
   display: inline-block; min-width: 4em; padding: 0 6px; border-bottom: 2px solid var(--accent);
@@ -347,6 +352,7 @@ h3.label { margin: 28px 0 8px; }
   padding: 28px 24px 20px; border-radius: var(--radius); border: 1.5px solid var(--stroke); background: var(--surface);
   color: var(--text); font: inherit; text-align: center; cursor: pointer; box-shadow: var(--shadow);
 }
+.flashcard .place { align-self: center; margin: 0 28px; text-align: center; }
 .flashcard .front { font-size: 20px; font-weight: 650; line-height: 1.45; }
 .flashcard.flipped { cursor: default; border-color: var(--accent); }
 .flashcard.flipped .front { font-size: 16px; color: var(--muted); font-weight: 600; }

@@ -451,6 +451,81 @@
     return row;
   }
 
+  // --- Place --------------------------------------------------------------------------------------
+  // As in the app: where an item's main passage sits in the notes ("Chapter › Section"), shown above a question or
+  // card before it is answered. A heading that would give the answer away is left out: one with a word the answer
+  // holds and the prompt does not. The subsection goes first, then the chapter; when both would tell, no place.
+
+  var EXAM_HEADINGS = ["exam focus", "à retenir pour l'examen", "clave para el examen", "prüfungsrelevant",
+    "essencial para a prova", "da sapere per l'esame", "belangrijk voor het examen"];
+  var WORD_SPLIT = /[^\p{L}\p{N}]+/u;
+
+  function isExamHeading(heading) {
+    return EXAM_HEADINGS.indexOf(String(heading).replace(/’/g, "'").trim().toLowerCase()) >= 0;
+  }
+
+  function stripMarks(s) {
+    return String(s || "").normalize("NFKD").replace(/\p{M}/gu, "");
+  }
+
+  /** Lower case, plural "s" dropped, so "Hooks" in a heading meets "hook" in an answer. */
+  function foldWord(w) {
+    w = w.toLowerCase();
+    return w.length > 3 && w.charAt(w.length - 1) === "s" ? w.slice(0, -1) : w;
+  }
+
+  function wordsOf(text) {
+    var out = {};
+    stripMarks(text).split(WORD_SPLIT).forEach(function (w) { if (w) out[foldWord(w)] = true; });
+    return out;
+  }
+
+  /** Whether a word of this heading is one the answer tells: words of 4 letters or more, acronyms and numbers. */
+  function gives(heading, told) {
+    return stripMarks(heading).split(WORD_SPLIT).some(function (raw) {
+      if (!raw) return false;
+      var acronym = raw.length >= 2 && raw === raw.toUpperCase() && raw !== raw.toLowerCase();
+      return (raw.length >= 4 || acronym || /\d/.test(raw)) && told[foldWord(raw)];
+    });
+  }
+
+  function cleanHeading(heading) {
+    return heading.replace(/[*`]/g, "").trim();
+  }
+
+  /** The text that answers a question: its correct options, its blank, or what makes a statement true or false. */
+  function answerKey(q) {
+    var parts = [];
+    if (q.type === "mcq") parts.push((q.answers || [])[q.correct]);
+    else if (q.type === "multi") (q.correct || []).forEach(function (i) { parts.push((q.options || [])[i]); });
+    else if (q.type === "cloze") parts = [q.answer].concat(q.accept || []);
+    else if (q.type === "true_false") parts.push(q.explanation);
+    // order: the items are on screen; a heading does not tell their order.
+    return parts.filter(function (p) { return typeof p === "string"; }).join(" ");
+  }
+
+  function placeOf(item, prompt, answer) {
+    var src = sourcesOf(item);
+    for (var i = 0; i < src.length; i++) {
+      var where = md.locate(sections, src[i].section_id, src[i].quote);
+      if (!where) continue;
+      var section = where.section;
+      var chapter = section.level === 2 ? section
+        : sections.filter(function (s) { return s.id === section.id.split(".")[0]; })[0];
+      if (chapter && isExamHeading(chapter.heading)) return null;
+      var told = wordsOf(answer);
+      Object.keys(wordsOf(prompt)).forEach(function (w) { delete told[w]; });
+      var chapterName = !chapter || gives(chapter.heading, told) ? null : cleanHeading(chapter.heading);
+      if (section === chapter || gives(section.heading, told)) return chapterName;
+      return chapterName ? chapterName + " › " + cleanHeading(section.heading) : cleanHeading(section.heading);
+    }
+    return null;
+  }
+
+  function placeLabel(place) {
+    return place ? h("span", { class: "place", text: place }) : null;
+  }
+
   var passageDialog = document.getElementById("passage-dialog");
   var passageTitle = document.getElementById("passage-title");
   var passageBody = document.getElementById("passage-body");
@@ -679,7 +754,8 @@
     var stemHtml = md.inline(q.q).replace(/＿+|_{2,}/, '<span class="blank" data-blank>   </span>');
     var stem = h("div", { class: "stem", html: stemHtml });
     md.typeset(stem);
-    card.append(h("div", { class: "question-top" }, stem, flagButton("question", q.id)));
+    card.append(h("div", { class: "question-top" },
+      h("div", { class: "question-main" }, placeLabel(placeOf(q, q.q, answerKey(q))), stem), flagButton("question", q.id)));
     var body = h("div", { class: "answer-area" });
     var feedback = h("div", { class: "feedback", hidden: true, "aria-live": "polite" });
     card.append(body, feedback);
@@ -920,7 +996,8 @@
 
     var front = h("div", { class: "face front" }, mdBlock(c.front));
     var back = h("div", { class: "face back", hidden: true }, mdBlock(c.back));
-    var flip = h("button", { type: "button", class: "flashcard", "aria-expanded": "false" }, front, back,
+    var flip = h("button", { type: "button", class: "flashcard", "aria-expanded": "false" },
+      placeLabel(placeOf(c, c.front, c.back)), front, back,
       h("span", { class: "flip-hint" }, icon("flip"), t("cards_flip")));
     var after = h("div", { class: "card-after", hidden: true });
     out.append(h("div", { class: "flash-wrap" }, flip, flagButton("card", c.id)), after);
