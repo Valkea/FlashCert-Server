@@ -9,6 +9,9 @@ generate anything. They can flag an error on any element, and the app collects t
 * `/` lists the **public** courses, grouped by certification.
 * `/c/<id>` is one course: **Notes**, **Revision**, **Quiz**, **Cards**. Every answer and card opens the passage of
   the notes it rests on, highlighted, without leaving the quiz.
+* **Add to FlashCert** on a shared course or certification hands it to the app, which adds this server by itself:
+  a copy, a copy that follows the author's changes, or (when allowed) the course itself. Owners can also **invite**
+  someone to read a course or certification, or to edit it with them (see [Sharing with other people](#sharing-with-other-people)).
 * Visitor progress (quiz scores, known cards) stays in the visitor's browser, and only once they agree.
   Turning it on also asks the browser for *persistent storage*; the page explains why.
 * One Docker image (Python, Flask, SQLAlchemy). SQLite by default, PostgreSQL by changing one URL. No CDN.
@@ -115,6 +118,37 @@ Courses sent before owners existed (version 0.1) belong to the server's only tok
 an identical resend can claim one. Assign courses explicitly before changing their content: `courses` shows each
 course's owner, and `owner TOKEN_ID UID…` sets it by hand.
 
+## Sharing with other people
+
+A link to a course (`/c/<id>`) or to a whole certification (`/cert/<id>`) has an **Add to FlashCert** button. It
+opens the app (`flashcert://add?url=<the page>`), which adds this server to its list by itself: nobody types an
+address or a token. What the button offers is the owner's choice for that course or certification, within what the
+server allows (`FLASHCERT_SHARE_LINK_ACTIONS`, `copy,follow` by default):
+
+* **copy**: the app makes a course of its own from the page. Edits to it never touch the original; it backs up to
+  the person's own server, under a new id, if they have one.
+* **follow**: a copy that also takes the author's later changes (the app asks with `If-None-Match`). Questions and
+  cards keep their ids, so progress on them survives an update; a copy edited on the phone asks before taking one.
+* **join**: the person's app gets a **guest** token and syncs the course itself, read only. Off by default.
+
+**Invites** (on by default, `FLASHCERT_SHARE_INVITES=0` turns them off) are links to `/join/<code>` the owner hands
+to someone: viewer or editor, of a course or of a whole certification, with a number of uses (1 by default) and an
+expiry (7 days by default). Opening the page doesn't use it; the app redeems it. Someone who already syncs with this
+server gets the access on their token; anyone else gets a new guest token.
+
+* There is **no sign-up**. A guest token only exists because someone redeemed an invite or joined from a link, and
+  it only reaches what it was given: it can't send courses of its own. `token promote ID` turns a guest into a user.
+* **Viewers** sync the course down. **Editors** also send changes: each one is a new revision recorded with its
+  author (`history`), recoverable like the owner's, and editors read the course's error reports. Only the owner
+  decides who sees the course, where it is listed, who is a member, and deletes it.
+* A **certification** is shared from its name: every course of its owner with that certification, now and later.
+  An invite covers its private courses too; a link only the ones that aren't private, and only while the
+  certification itself is shared.
+* When access ends (the member is removed or leaves, the course is deleted, made private while joined from its
+  link, or moved out of the certification), the member's devices are told the course is `revoked` and keep their
+  copy, detached.
+* Study progress never leaves anyone's phone: each person keeps theirs on a shared course.
+
 ## Your data
 
 The database is not inside the container. With the default SQLite, it is a file in a Docker **volume**: a separate
@@ -170,6 +204,9 @@ In `.env` (see [`.env.example`](.env.example)):
 | `FLASHCERT_SHARE_SITE_NAME` | `FlashCert` | Shown in the header and page titles |
 | `FLASHCERT_SHARE_MAX_UPLOAD_MB` | `20` | Largest course the app may upload (keep the proxy's body limit in line) |
 | `FLASHCERT_SHARE_REPORTS_PER_HOUR` | `20` | Error reports allowed per visitor IP per hour |
+| `FLASHCERT_SHARE_LINK_ACTIONS` | `copy,follow` | The most **Add to FlashCert** may offer: any of `copy`, `follow`, `join`, or `none`. Owners can offer less. |
+| `FLASHCERT_SHARE_INVITES` | `1` | `0` turns invitations off |
+| `FLASHCERT_SHARE_JOINS_PER_HOUR` | `10` | Joins (invite or link) allowed per visitor IP per hour |
 | `FLASHCERT_SHARE_PORT` | `8080` | Host port (compose only) |
 | `FLASHCERT_SHARE_IMAGE` | `ghcr.io/valkea/flashcert-share:latest` | Image (compose only) |
 
@@ -178,7 +215,7 @@ In `.env` (see [`.env.example`](.env.example)):
 Inside the container: `docker compose exec share flashcert-share …`
 
 ```
-flashcert-share token create [--label NAME] | token list | token revoke ID
+flashcert-share token create [--label NAME] | token list | token revoke ID | token promote ID
 flashcert-share courses                    courses with their links and owners
 flashcert-share owner TOKEN_ID UID… | --from TOKEN_ID | --unowned   give courses to a token
 flashcert-share import FILE [--uid X] [--certification NAME] [--unlisted] [--owner TOKEN_ID]
@@ -265,7 +302,7 @@ cannot silently change existing content, download replacements or receive deleti
 hard-delete local recordings. They must upgrade before participating in two-way sync.
 
 Every `/api/v1` call takes `Authorization: Bearer <token>` and only sees that token's courses and their reports:
-other people's courses answer 404 (403 when sending one). JSON in, JSON out; errors are `{"error": "…"}` with
+other people's courses answer 404 (403 when sending one), unless they were shared with it (below). JSON in, JSON out; errors are `{"error": "…"}` with
 400, 401, 403, 404, 409 (review/conflict), 413 (too large), 422 (course rejected), 428 (revision required) or 429.
 
 | | |
@@ -279,6 +316,29 @@ other people's courses answer 404 (403 when sending one). JSON in, JSON out; err
 | `GET /api/v1/reports?status=open\|resolved\|dismissed\|all&course={uid}&since_id={n}` | reports, oldest first: `{id, course_uid, element: {kind, id}, excerpt, message, author, status, created_at, updated_at}` |
 | `PATCH /api/v1/reports/{id}` | `{"status": "resolved" \| "dismissed" \| "open"}` |
 | `DELETE /api/v1/reports/{id}` | |
+
+### Shared courses (sync version 2)
+
+With `X-FlashCert-Sync-Version: 2`, `GET /api/v1/courses` also lists the courses shared with the token. Every
+summary has a `role` (`owner`, `editor`, `viewer`); shared ones add the `owner`'s label, and the owner's own carry
+`link_actions` (their choice, `null` for the server's) and `actions` (what the link offers). `gone` adds
+`{uid, reason: "revoked", revision}` when a shared course is no longer reachable: keep the local copy, detached.
+`GET`, `history` and revisions work for members; `PUT`, `preview` and `restore` for editors, whose `PUT` keeps the
+owner's `visibility`, `certification` and `position`. A guest token's `PUT` of a new course answers 403
+`code: guest`; a viewer's 403 `code: read_only`. `/status` adds `sync_version: 2`, `kind` (`user`/`guest`),
+`site_name`, `link_actions` and `invites`.
+
+| | |
+|---|---|
+| `PATCH /api/v1/courses/{uid}` | also `{link_actions: [..] \| null}` (the owner) |
+| `POST /api/v1/invites` | `{course: uid \| certification: name, role: viewer\|editor, uses: 1, days: 7}` (0 days: no expiry) → `{id, code, url, …}`; the code is shown once |
+| `GET /api/v1/invites`, `DELETE /api/v1/invites/{id}` | the owner's usable invites; revoke one |
+| `GET /api/v1/members?course=uid` or `?certification=name` | `{members: [{id, token_id, label, guest, role, via, …}]}` |
+| `PATCH /api/v1/memberships/{id}` | `{role}` (the owner) |
+| `DELETE /api/v1/memberships/{id}` | the owner removes a member, or the member leaves |
+| `GET /api/v1/memberships` | what was shared with this token: `{id, role, via, owner, course: {uid, title} \| certification: {name, share_id}}` |
+| `PUT /api/v1/certifications` | `{name, visibility, link_actions}` → `{name, share_id, url, visibility, courses, link_actions, actions}`; `private`: members only |
+| `GET /api/v1/certifications` | the owner's shared certifications |
 
 `uid` is the app's own stable id for the course (1–100 characters among `A-Z a-z 0-9 . _ : -`), e.g. a UUID
 kept on the course row. The server answers with the public `url`, which never changes while the course is on the
@@ -347,6 +407,13 @@ paused mode applies none. A stale preview must be refreshed, including when a se
 `GET /api/v1/reports?since_id=<last seen>`.
 
 ## Public endpoints
+
+`GET /api/public/courses/{share_id}` also gives `url`, `revision`, `hash`, `modified_at`, `position`, `actions` and
+`server: {name, url}`, with an `ETag` (`If-None-Match` answers 304). `GET /api/public/certifications/{share_id}`
+lists a shared certification's courses the same way. `GET /api/public/invites/{code}` previews an invite without
+using it. `POST /api/public/join` takes `{code}`, `{course: share_id}` or `{certification: share_id}` and an
+optional `name`; with a bearer token the access goes to that token, otherwise the answer carries a new guest
+`token`, once (201).
 
 `GET /api/public/courses`, `GET /api/public/courses/{share_id}` (what the pages use; private courses answer 404) and
 `POST /api/public/courses/{share_id}/reports` with

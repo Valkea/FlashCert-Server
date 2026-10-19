@@ -2,7 +2,7 @@
 
     flashcert-share serve [--host 127.0.0.1] [--port 8080]
     flashcert-share token create [--label phone]     # prints the token once
-    flashcert-share token list | token revoke ID
+    flashcert-share token list | token revoke ID | token promote ID   # promote: a guest may back up courses
     flashcert-share courses                          # what is shared, with links and owners
     flashcert-share owner TOKEN_ID UID… | --from ID | --unowned   # who may change and download courses
     flashcert-share import bundle.json [--uid X]     # share a course file without the app
@@ -77,7 +77,8 @@ def cmd_token(cfg: Config, args) -> None:
             print("No tokens.")
         for r in rows:
             state = f"REVOKED {_when(r['revoked_at'])}" if r["revoked_at"] else f"last used {_when(r['last_used_at'])}"
-            print(f"#{r['id']:<4} {r['label'] or '-':<20} created {_when(r['created_at'])}  {state}  "
+            kind = " (guest)" if r["kind"] == "guest" else ""
+            print(f"#{r['id']:<4} {(r['label'] or '-') + kind:<28} created {_when(r['created_at'])}  {state}  "
                   f"{r['courses']} course(s)")
     elif args.action == "revoke":
         if args.id is None:
@@ -89,6 +90,12 @@ def cmd_token(cfg: Config, args) -> None:
         if owned:
             print(f"Its {owned} course(s) stay online. To hand them to a new token: "
                   f"flashcert-share owner NEW_ID --from {args.id}")
+    elif args.action == "promote":
+        if args.id is None:
+            sys.exit("token promote needs a token id (see `token list`)")
+        if not db.promote_token(engine, args.id):
+            sys.exit("No such guest token.")
+        print("Promoted: this token may now back up courses of its own.")
 
 
 def _link(cfg: Config, share_id: str) -> str:
@@ -192,7 +199,7 @@ def cmd_copy_db(cfg: Config, args) -> None:
         if target.dialect.name == "postgresql":
             from sqlalchemy import text
 
-            for table in ("token", "course", "report"):  # course_gone is keyed by uid
+            for table in ("token", "course", "report", "collection", "membership", "invite"):  # course_gone: by uid
                 dst.execute(text(f"SELECT setval(pg_get_serial_sequence('{table}', 'id'), "
                                  f"COALESCE((SELECT MAX(id) FROM {table}), 0) + 1, false)"))
     print("Done. Point FLASHCERT_SHARE_DATABASE_URL at the new database and restart the server.")
@@ -213,7 +220,7 @@ def main(argv: list[str] | None = None) -> None:
     p.set_defaults(func=cmd_serve)
 
     p = sub.add_parser("token", help="manage the app's sync tokens")
-    p.add_argument("action", choices=("create", "list", "revoke"))
+    p.add_argument("action", choices=("create", "list", "revoke", "promote"))
     p.add_argument("id", nargs="?", type=int)
     p.add_argument("--label", help="a name to recognise the token, e.g. 'pixel'")
     p.set_defaults(func=cmd_token)

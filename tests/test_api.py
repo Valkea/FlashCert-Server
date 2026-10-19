@@ -73,8 +73,9 @@ def test_public_course_has_no_private_fields(client, auth, course):
                           "transcript": [{"text": "secret"}], "costs": [{"cost": 1}], "analysis": {"x": 1}}
     share_id = put(client, auth, course_with_extras).get_json()["share_id"]
     data = client.get(f"/api/public/courses/{share_id}").get_json()
-    assert set(data) == {"share_id", "title", "certification", "lang", "updated_at", "notes", "sheet", "questions", "cards"}
-    assert "uid" not in data
+    assert set(data) == {"share_id", "url", "title", "certification", "lang", "position", "updated_at", "modified_at",
+                         "revision", "hash", "actions", "server", "notes", "sheet", "questions", "cards"}
+    assert "uid" not in data and "owner" not in data
 
 
 def test_invalid_items_are_dropped_with_warnings(client, auth, course):

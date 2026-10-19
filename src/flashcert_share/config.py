@@ -7,11 +7,19 @@ from dataclasses import dataclass
 from pathlib import Path
 
 PREFIX = "FLASHCERT_SHARE_"
+#: What the app may offer on a shared page: take a copy, a copy that follows the author's changes, or join the course.
+LINK_ACTIONS = ("copy", "follow", "join")
 
 
 def _env(name: str, default: str | None = None) -> str | None:
     value = os.environ.get(PREFIX + name)
     return value if value not in (None, "") else default
+
+
+def link_actions(value: str | None) -> tuple[str, ...]:
+    """The known actions in ``value`` ("copy,follow"), in their usual order."""
+    chosen = {a.strip().lower() for a in (value or "").split(",")}
+    return tuple(a for a in LINK_ACTIONS if a in chosen)
 
 
 def default_data_dir() -> Path:
@@ -38,6 +46,12 @@ class Config:
     trash_days: int = 30
     notes_change_percent: int = 30
     items_change_percent: int = 20
+    #: The most a shared link may offer in the app; each owner can offer less per course or certification.
+    link_actions: tuple[str, ...] = ("copy", "follow")
+    #: Owners can invite people to their courses and certifications.
+    invites: bool = True
+    #: Joins (invite or link) allowed per visitor IP per hour.
+    joins_per_hour: int = 10
 
     @classmethod
     def from_env(cls, **overrides) -> "Config":
@@ -57,6 +71,9 @@ class Config:
             trash_days=max(1, int(_env("TRASH_DAYS", "30"))),
             notes_change_percent=max(1, min(100, int(_env("NOTES_CHANGE_PERCENT", "30")))),
             items_change_percent=max(1, min(100, int(_env("ITEMS_CHANGE_PERCENT", "20")))),
+            link_actions=link_actions(_env("LINK_ACTIONS", "copy,follow")),
+            invites=_env("INVITES", "1") not in ("0", "false", "no", "off"),
+            joins_per_hour=int(_env("JOINS_PER_HOUR", "10")),
         )
         for key, value in overrides.items():
             if value is not None:

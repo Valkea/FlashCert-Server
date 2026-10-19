@@ -17,6 +17,8 @@ from sqlalchemy import (
     String,
     Table,
     Text,
+    UniqueConstraint,
+    and_,
     create_engine,
     event,
     func,
@@ -27,7 +29,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.engine import Engine
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 metadata = MetaData()
 
@@ -49,6 +51,9 @@ token = Table(
     Column("created_at", BigInteger, nullable=False),
     Column("last_used_at", BigInteger),
     Column("revoked_at", BigInteger),
+    #: "user": made by the admin, backs up courses of its own. "guest": made when someone joined through an invite or
+    #: a shared link; it only reaches the courses it was given and can't send new ones (`token promote` lifts that).
+    Column("kind", String(10), nullable=False, default="user"),
 )
 
 course = Table(
@@ -82,6 +87,9 @@ course = Table(
     Column("revision", BigInteger, nullable=False, default=1),
     Column("deleted_at", BigInteger),
     Column("event", String(16), nullable=False, default="created"),
+    #: What the owner lets people with the link do from the app (copy, follow, join), comma separated, within what
+    #: the server allows. None: everything the server allows.
+    Column("link_actions", String(40)),
 )
 
 #: Courses deleted through the sync API, so the owner's other devices learn about it. reason: "deleted" (the
@@ -104,6 +112,64 @@ course_revision = Table(
     Column("action", String(16), nullable=False),
     Column("device", String(100), nullable=False, default=""),
     Column("created_at", BigInteger, nullable=False),
+    #: The token that made the revision: the owner or a member allowed to edit.
+    Column("token_id", Integer),
+)
+
+#: A certification shared as a whole: every course of its owner with that certification name, now and later.
+collection = Table(
+    "collection",
+    metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("owner_id", Integer, nullable=False),
+    Column("name", String(200), nullable=False),
+    Column("share_id", String(16), nullable=False, unique=True),
+    #: "private": members only, no page. "unlisted" or "public": a page listing its shared courses.
+    Column("visibility", String(10), nullable=False, default="private"),
+    Column("link_actions", String(40)),
+    Column("created_at", BigInteger, nullable=False),
+    UniqueConstraint("owner_id", "name"),
+)
+
+#: Another token's access to a course or to a whole certification. via "invite": the owner chose this person, private
+#: courses included. via "link": taken from a shared page, so it covers what is still shared (not private) only.
+membership = Table(
+    "membership",
+    metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("token_id", Integer, nullable=False),
+    Column("course_id", Integer, ForeignKey("course.id", ondelete="CASCADE")),
+    Column("collection_id", Integer, ForeignKey("collection.id", ondelete="CASCADE")),
+    #: viewer | editor
+    Column("role", String(10), nullable=False),
+    Column("via", String(10), nullable=False),
+    Column("created_at", BigInteger, nullable=False),
+)
+
+#: A link the owner hands to someone: redeeming it gives access to a course or a certification. Only a SHA-256 of
+#: the code is kept, like tokens.
+invite = Table(
+    "invite",
+    metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("hash", String(64), nullable=False, unique=True),
+    Column("course_id", Integer, ForeignKey("course.id", ondelete="CASCADE")),
+    Column("collection_id", Integer, ForeignKey("collection.id", ondelete="CASCADE")),
+    Column("role", String(10), nullable=False),
+    Column("created_by", Integer, nullable=False),
+    Column("created_at", BigInteger, nullable=False),
+    Column("expires_at", BigInteger),
+    Column("uses_left", Integer, nullable=False),
+    Column("revoked_at", BigInteger),
+)
+
+#: Courses of other tokens a member's devices were given, so they learn when that access ends and keep their copies.
+access_seen = Table(
+    "access_seen",
+    metadata,
+    Column("token_id", Integer, primary_key=True),
+    Column("uid", String(100), primary_key=True),
+    Column("revision", BigInteger, nullable=False),
 )
 
 #: Errors flagged by visitors on one element of a course.
@@ -126,6 +192,7 @@ report = Table(
 )
 
 Index("report_course_status", report.c.course_id, report.c.status)
+Index("membership_token", membership.c.token_id)
 Index("course_visibility", course.c.visibility, course.c.updated_at)
 course_owner = Index("course_owner", course.c.owner_id)
 
@@ -159,6 +226,8 @@ def init(engine: Engine) -> None:
             conn.execute(meta.insert().values(key="schema_version", value=str(SCHEMA_VERSION)))
             return
         version = int(row.value)
+        if version < 4:
+            _to_v4(conn)  # first: the older steps read whole rows, new columns included
         if version < 2:
             _to_v2(conn)
         if version < 3:
@@ -179,15 +248,26 @@ def _to_v2(conn) -> None:
 
 
 def _to_v3(conn) -> None:
-    for table, columns in (("course", {"revision": "BIGINT NOT NULL DEFAULT 1", "deleted_at": "BIGINT",
-                                        "event": "VARCHAR(16) NOT NULL DEFAULT 'created'"}),
-                           ("course_gone", {"revision": "BIGINT NOT NULL DEFAULT 0"})):
+    _add_columns(conn, {"course": {"revision": "BIGINT NOT NULL DEFAULT 1", "deleted_at": "BIGINT",
+                                   "event": "VARCHAR(16) NOT NULL DEFAULT 'created'"},
+                        "course_gone": {"revision": "BIGINT NOT NULL DEFAULT 0"}})
+    for row in conn.execute(select(course)).all():
+        _snapshot(conn, row, "migrated", "")
+
+
+def _to_v4(conn) -> None:
+    """Guests, link actions and revision authors; memberships, invites and collections are new tables."""
+    _add_columns(conn, {"token": {"kind": "VARCHAR(10) NOT NULL DEFAULT 'user'"},
+                        "course": {"link_actions": "VARCHAR(40)"},
+                        "course_revision": {"token_id": "INTEGER"}})
+
+
+def _add_columns(conn, tables: dict[str, dict[str, str]]) -> None:
+    for table, columns in tables.items():
         present = {c["name"] for c in inspect(conn).get_columns(table)}
         for name, definition in columns.items():
             if name not in present:
                 conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {name} {definition}"))
-    for row in conn.execute(select(course)).all():
-        _snapshot(conn, row, "migrated", "")
 
 
 # --- Tokens -------------------------------------------------------------------------------------
@@ -197,13 +277,27 @@ def hash_token(raw: str) -> str:
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
 
-def create_token(engine: Engine, label: str = "") -> tuple[int, str]:
-    raw = "fcs_" + secrets.token_urlsafe(32)
+def create_token(engine: Engine, label: str = "", kind: str = "user") -> tuple[int, str]:
     with engine.begin() as conn:
-        result = conn.execute(
-            token.insert().values(label=label[:100], hash=hash_token(raw), created_at=now_ms())
-        )
-        return result.inserted_primary_key[0], raw
+        return _new_token(conn, label, kind)
+
+
+def _new_token(conn, label: str, kind: str) -> tuple[int, str]:
+    raw = "fcs_" + secrets.token_urlsafe(32)
+    result = conn.execute(token.insert().values(label=label[:100], hash=hash_token(raw), created_at=now_ms(), kind=kind))
+    return result.inserted_primary_key[0], raw
+
+
+def token_info(engine: Engine, token_id: int):
+    with engine.connect() as conn:
+        return conn.execute(select(token.c.id, token.c.label, token.c.kind).where(token.c.id == token_id)).first()
+
+
+def promote_token(engine: Engine, token_id: int) -> bool:
+    """A guest becomes a user: it may then back up courses of its own."""
+    with engine.begin() as conn:
+        return conn.execute(token.update().where(token.c.id == token_id, token.c.kind == "guest")
+                            .values(kind="user")).rowcount > 0
 
 
 def check_token(engine: Engine, raw: str) -> int | None:
@@ -227,7 +321,7 @@ def list_tokens(engine: Engine) -> list[dict]:
     owned = (select(course.c.owner_id, func.count().label("courses"))
              .where(course.c.deleted_at.is_(None)).group_by(course.c.owner_id)).subquery()
     with engine.connect() as conn:
-        rows = conn.execute(select(token.c.id, token.c.label, token.c.created_at, token.c.last_used_at,
+        rows = conn.execute(select(token.c.id, token.c.label, token.c.kind, token.c.created_at, token.c.last_used_at,
                                    token.c.revoked_at, func.coalesce(owned.c.courses, 0).label("courses"))
                             .outerjoin(owned, owned.c.owner_id == token.c.id)
                             .order_by(token.c.id))
@@ -259,10 +353,11 @@ class SyncConflict(Exception):
         super().__init__(code.replace("_", " "))
 
 
-def _snapshot(conn, row, action: str, device: str) -> None:
+def _snapshot(conn, row, action: str, device: str, author: int | None = None) -> None:
     conn.execute(course_revision.insert().values(course_id=row.id, revision=row.revision,
                  snapshot=json.dumps(dict(row._mapping), ensure_ascii=False), action=action,
-                 device=device[:100], created_at=now_ms()))
+                 device=device[:100], created_at=now_ms(),
+                 token_id=author if author is not None else row.owner_id))
 
 
 def _expected(row, expected: int | None) -> None:
@@ -272,23 +367,24 @@ def _expected(row, expected: int | None) -> None:
         raise SyncConflict("revision_conflict", row.revision)
 
 
-def _update(conn, row, values: dict, action: str, device: str) -> None:
+def _update(conn, row, values: dict, action: str, device: str, author: int | None = None) -> None:
     owner = course.c.owner_id.is_(None) if row.owner_id is None else course.c.owner_id == row.owner_id
     done = conn.execute(course.update().where(course.c.id == row.id, course.c.revision == row.revision, owner)
                         .values(**values, revision=row.revision + 1, event=action)).rowcount
     if done != 1:
         raise SyncConflict("revision_conflict", row.revision)
-    _snapshot(conn, conn.execute(select(course).where(course.c.id == row.id)).one(), action, device)
+    _snapshot(conn, conn.execute(select(course).where(course.c.id == row.id)).one(), action, device, author)
 
 
 def save_course(engine: Engine, uid: str, values: dict, owner_id: int | None, *, expected: int | None = None,
                 confirmation: str | None = None, device: str = "", notes_limit: int = 30,
-                items_limit: int = 20) -> tuple[bool, bool]:
+                items_limit: int = 20, author: int | None = None) -> tuple[bool, bool]:
     """Creates or replaces course ``uid``; returns (created, changed).
 
     ``values`` are the columns taken from the document: the meta, content, content_hash, counts and modified_at.
     A token can only send its own courses and claims one without an owner. Deleted courses require explicit
     restore. ``owner_id`` None is an explicit command-line import; it retains the existing owner and history.
+    A member allowed to edit passes the owner's id and its own as ``author``, which the revision records.
     """
     now = now_ms()
     with engine.begin() as conn:
@@ -331,7 +427,7 @@ def save_course(engine: Engine, uid: str, values: dict, owner_id: int | None, *,
         if owner_id is not None and existing.owner_id is None:
             update["owner_id"] = owner_id
         if update:
-            _update(conn, existing, update, "updated" if changed else "visibility", device)
+            _update(conn, existing, update, "updated" if changed else "visibility", device, author)
         return False, changed
 
 
@@ -357,7 +453,7 @@ def delete_course(engine: Engine, course_id: int, uid: str, owner_id: int | None
 
 
 def restore_course(engine: Engine, uid: str, owner_id: int, revision: int, expected: int,
-                   confirmation: str, device: str = "", visibility: str | None = None) -> None:
+                   confirmation: str, device: str = "", visibility: str | None = None, author: int | None = None) -> None:
     with engine.begin() as conn:
         row = conn.execute(select(course).where(course.c.uid == uid).with_for_update()).first()
         if row is None or row.owner_id != owner_id:
@@ -377,7 +473,7 @@ def restore_course(engine: Engine, uid: str, owner_id: int, revision: int, expec
         values.update(deleted_at=None, updated_at=now_ms(), modified_at=now_ms())
         if visibility is not None:
             values["visibility"] = visibility
-        _update(conn, row, values, "restored", device)
+        _update(conn, row, values, "restored", device, author)
         conn.execute(course_gone.delete().where(course_gone.c.uid == uid))
 
 
@@ -411,7 +507,204 @@ def give_courses(engine: Engine, token_id: int, uids: list[str] | None = None, f
         done = conn.execute(course.update().where(or_(*conditions)).values(owner_id=token_id)).rowcount
         if from_id is not None:
             conn.execute(course_gone.update().where(course_gone.c.owner_id == from_id).values(owner_id=token_id))
+            taken = set(conn.execute(select(collection.c.name).where(collection.c.owner_id == token_id)).scalars())
+            moved = collection.update().where(collection.c.owner_id == from_id)
+            if taken:
+                moved = moved.where(collection.c.name.not_in(taken))
+            conn.execute(moved.values(owner_id=token_id))
+            conn.execute(invite.update().where(invite.c.created_by == from_id).values(created_by=token_id))
         return done
+
+
+# --- Sharing with other tokens ------------------------------------------------------------------
+
+ROLES = ("viewer", "editor", "owner")
+
+
+def rank(role: str | None) -> int:
+    return ROLES.index(role) if role in ROLES else -1
+
+
+def shared_with(conn, token_id: int) -> dict[int, str]:
+    """Live courses of other tokens that ``token_id`` was given, with its highest role on each: course id → role.
+
+    A membership taken from a shared link only covers what is still shared: courses that aren't private, and for a
+    certification, only while the certification itself is shared.
+    """
+    roles: dict[int, str] = {}
+    for m in conn.execute(select(membership).where(membership.c.token_id == token_id)).all():
+        query = select(course.c.id).where(course.c.deleted_at.is_(None), course.c.owner_id != token_id)
+        if m.course_id is not None:
+            query = query.where(course.c.id == m.course_id)
+        else:
+            col = conn.execute(select(collection).where(collection.c.id == m.collection_id)).first()
+            if col is None or (m.via == "link" and col.visibility == "private"):
+                continue
+            query = query.where(course.c.owner_id == col.owner_id, course.c.certification == col.name)
+        if m.via == "link":
+            query = query.where(course.c.visibility != "private")
+        for course_id in conn.execute(query).scalars():
+            if rank(m.role) > rank(roles.get(course_id)):
+                roles[course_id] = m.role
+    return roles
+
+
+def role_of(conn, token_id: int, row) -> str | None:
+    """"owner", "editor", "viewer" or None: what ``token_id`` may do with the course ``row``."""
+    if row.owner_id is not None and row.owner_id == token_id:
+        return "owner"
+    if row.deleted_at is not None:
+        return None
+    return shared_with(conn, token_id).get(row.id)
+
+
+def member_courses(engine: Engine, token_id: int) -> tuple[list, dict[int, str], list]:
+    """Other tokens' courses this token works on: (rows, roles, ended), where ``ended`` lists the access_seen rows of
+    courses its devices were given before and no longer reach (removed member, course deleted or made private…)."""
+    with engine.begin() as conn:
+        roles = shared_with(conn, token_id)
+        rows = conn.execute(select(course).where(course.c.id.in_(roles)).order_by(course.c.id)).all() if roles else []
+        seen = {r.uid: r for r in conn.execute(select(access_seen).where(access_seen.c.token_id == token_id)).all()}
+        for row in rows:
+            if row.uid in seen:
+                if seen.pop(row.uid).revision != row.revision:
+                    conn.execute(access_seen.update().where(access_seen.c.token_id == token_id,
+                                                            access_seen.c.uid == row.uid).values(revision=row.revision))
+            else:
+                conn.execute(access_seen.insert().values(token_id=token_id, uid=row.uid, revision=row.revision))
+        owned = set(conn.execute(select(course.c.uid).where(course.c.owner_id == token_id,
+                                                            course.c.uid.in_(list(seen)))).scalars()) if seen else set()
+        ended = [r for uid, r in seen.items() if uid not in owned]
+    return rows, roles, ended
+
+
+def grant(conn, token_id: int, role: str, via: str, course_id: int | None = None,
+          collection_id: int | None = None) -> int:
+    """Gives ``token_id`` a role on a course or a certification; an existing membership only ever goes up."""
+    target = (membership.c.course_id == course_id) if course_id is not None else (membership.c.collection_id == collection_id)
+    existing = conn.execute(select(membership).where(membership.c.token_id == token_id, target)).first()
+    if existing is None:
+        return conn.execute(membership.insert().values(token_id=token_id, course_id=course_id, collection_id=collection_id,
+                                                       role=role, via=via, created_at=now_ms())).inserted_primary_key[0]
+    values = {}
+    if rank(role) > rank(existing.role):
+        values["role"] = role
+    if via == "invite" and existing.via != "invite":
+        values["via"] = "invite"
+    if values:
+        conn.execute(membership.update().where(membership.c.id == existing.id).values(**values))
+    return existing.id
+
+
+def members(engine: Engine, owner_id: int, course_id: int | None = None, collection_id: int | None = None) -> list[dict]:
+    target = (membership.c.course_id == course_id) if course_id is not None else (membership.c.collection_id == collection_id)
+    with engine.connect() as conn:
+        rows = conn.execute(select(membership, token.c.label, token.c.kind, token.c.last_used_at)
+                            .join(token, token.c.id == membership.c.token_id).where(target)
+                            .order_by(membership.c.id)).all()
+    return [{"id": r.id, "token_id": r.token_id, "label": r.label, "guest": r.kind == "guest", "role": r.role,
+             "via": r.via, "created_at": r.created_at, "last_used_at": r.last_used_at} for r in rows]
+
+
+def membership_owner(conn, membership_id: int):
+    """(membership row, owner id of what it gives access to), or None."""
+    m = conn.execute(select(membership).where(membership.c.id == membership_id)).first()
+    if m is None:
+        return None
+    if m.course_id is not None:
+        owner = conn.execute(select(course.c.owner_id).where(course.c.id == m.course_id)).scalar_one_or_none()
+    else:
+        owner = conn.execute(select(collection.c.owner_id).where(collection.c.id == m.collection_id)).scalar_one_or_none()
+    return m, owner
+
+
+# --- Certifications shared as a whole ------------------------------------------------------------
+
+
+def collection_for(conn, owner_id: int, name: str, create: bool = False):
+    row = conn.execute(select(collection).where(collection.c.owner_id == owner_id, collection.c.name == name)).first()
+    if row is None and create:
+        share_id = new_share_id()
+        while conn.execute(select(collection.c.id).where(collection.c.share_id == share_id)).first() or \
+                conn.execute(select(course.c.id).where(course.c.share_id == share_id)).first():
+            share_id = new_share_id()
+        conn.execute(collection.insert().values(owner_id=owner_id, name=name[:200], share_id=share_id,
+                                                visibility="private", created_at=now_ms()))
+        row = conn.execute(select(collection).where(collection.c.owner_id == owner_id, collection.c.name == name)).first()
+    return row
+
+
+def collection_courses(conn, col, include_private: bool) -> list:
+    """The certification's live courses, in the owner's order."""
+    query = select(course).where(course.c.owner_id == col.owner_id, course.c.certification == col.name,
+                                 course.c.deleted_at.is_(None))
+    if not include_private:
+        query = query.where(course.c.visibility != "private")
+    rows = conn.execute(query).all()
+    rows.sort(key=lambda r: (r.position is None, r.position or 0, r.title.casefold()))
+    return rows
+
+
+# --- Invites -------------------------------------------------------------------------------------
+
+
+def create_invite(engine: Engine, owner_id: int, role: str, uses: int, expires_at: int | None,
+                  course_id: int | None = None, collection_id: int | None = None) -> tuple[int, str]:
+    """Returns (id, code). The code is shown once; only its hash is kept."""
+    code = secrets.token_urlsafe(18)
+    with engine.begin() as conn:
+        result = conn.execute(invite.insert().values(hash=hash_token(code), course_id=course_id,
+                                                     collection_id=collection_id, role=role, created_by=owner_id,
+                                                     created_at=now_ms(), expires_at=expires_at, uses_left=uses))
+        return result.inserted_primary_key[0], code
+
+
+def _valid_invite():
+    now = now_ms()
+    return and_(invite.c.revoked_at.is_(None), invite.c.uses_left > 0,
+                or_(invite.c.expires_at.is_(None), invite.c.expires_at > now))
+
+
+def find_invite(conn, code: str):
+    """The invite behind a code while it can still be used, or None."""
+    if not code or len(code) > 100:
+        return None
+    return conn.execute(select(invite).where(invite.c.hash == hash_token(code), _valid_invite())).first()
+
+
+class InviteInvalid(Exception):
+    """Unknown, revoked, used up or expired."""
+
+
+def join(engine: Engine, token_id: int | None, label: str, *, code: str | None = None, course_id: int | None = None,
+         collection_id: int | None = None) -> tuple[int, str | None, int | None]:
+    """Gives access through an invite code, or as a viewer through a shared link (``course_id``/``collection_id``,
+    checked by the caller). Without ``token_id`` a guest token is made. Returns (token id, new raw token or None,
+    membership id; None when the token already owns what it joined)."""
+    with engine.begin() as conn:
+        role, via = "viewer", "link"
+        if code is not None:
+            inv = conn.execute(select(invite).where(invite.c.hash == hash_token(code), _valid_invite())
+                               .with_for_update()).first()
+            if inv is None:
+                raise InviteInvalid(code)
+            role, via, course_id, collection_id = inv.role, "invite", inv.course_id, inv.collection_id
+        if course_id is not None:
+            owner = conn.execute(select(course.c.owner_id).where(course.c.id == course_id)).scalar_one()
+        else:
+            owner = conn.execute(select(collection.c.owner_id).where(collection.c.id == collection_id)).scalar_one()
+        if token_id is not None and token_id == owner:
+            return token_id, None, None
+        if code is not None:
+            used = conn.execute(invite.update().where(invite.c.id == inv.id, invite.c.uses_left > 0)
+                                .values(uses_left=invite.c.uses_left - 1)).rowcount
+            if used != 1:
+                raise InviteInvalid(code)
+        raw = None
+        if token_id is None:
+            token_id, raw = _new_token(conn, label or "guest", "guest")
+        membership_id = grant(conn, token_id, role, via, course_id, collection_id)
+        return token_id, raw, membership_id
 
 
 # --- Share ids ----------------------------------------------------------------------------------

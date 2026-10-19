@@ -1,0 +1,19 @@
+{% extends "base.html" %}
+{% block title %}{{ t.invite_title }} · {{ site_name }}{% endblock %}
+{% block meta %}<meta name="robots" content="noindex">{% endblock %}
+{% block content %}
+<section class="hero">
+  <h1>{{ t.invite_title }}</h1>
+  <p class="cert-chip"><svg class="icon" aria-hidden="true"><use href="#i-cap"/></svg>{{ invite.certification or t.other }}</p>
+  <h2>{{ invite.title }}</h2>
+  <p class="muted">
+    {% if invite.owner %}{{ t.invite_from }} {{ invite.owner }} · {% endif %}
+    {% if invite.kind == "certification" %}{{ invite.courses }} {{ t.course_count }} · {% endif %}
+    {{ invite.questions }} {{ t.questions }} · {{ invite.cards }} {{ t.cards }}
+  </p>
+  <p>{{ t.invite_editor if invite.role == "editor" else t.invite_viewer }}</p>
+  <p><a class="btn" href="{{ app_link }}"><svg class="icon"><use href="#i-plus"/></svg>{{ t.add_to_app }}</a></p>
+  <p class="muted">{{ t.invite_install }}</p>
+  {% if invite.expires_at %}<p class="muted">{{ t.invite_expires }} <time datetime="{{ invite.expires_at }}">{{ invite.expires_at[:10] }}</time></p>{% endif %}
+</section>
+{% endblock %}

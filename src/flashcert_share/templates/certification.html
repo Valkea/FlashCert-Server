@@ -1,0 +1,39 @@
+{% extends "base.html" %}
+{% block title %}{{ name }} · {{ site_name }}{% endblock %}
+{% block meta %}
+  {% if unlisted %}<meta name="robots" content="noindex">{% endif %}
+  <link rel="canonical" href="{{ url }}">
+  <meta property="og:title" content="{{ name }}">
+  <meta property="og:type" content="website">
+  <meta property="og:url" content="{{ url }}">
+  <meta property="og:site_name" content="{{ site_name }}">
+{% endblock %}
+{% block content %}
+<section class="hero">
+  <a class="back" href="{{ url_for('index') }}"><svg class="icon"><use href="#i-back"/></svg>{{ t.back }}</a>
+  <h1><svg class="icon" aria-hidden="true"><use href="#i-cap"/></svg> {{ name }}</h1>
+  <p class="muted">{{ courses|length }} {{ t.course_count }}</p>
+  {% if app_link %}
+  <p><a class="btn" href="{{ app_link }}"><svg class="icon"><use href="#i-plus"/></svg>{{ t.add_to_app }}</a></p>
+  <p class="muted">{{ t.add_to_app_help }}</p>
+  {% endif %}
+</section>
+{% if not courses %}
+<p class="empty">{{ t.no_courses }}</p>
+{% endif %}
+<ul class="course-list">
+  {% for c in courses %}
+  <li class="course-item">
+    <a href="{{ url_for('course_page', share_id=c.share_id) }}" data-share-id="{{ c.share_id }}" data-cards="{{ c.card_count }}">
+      <span class="course-title">{{ c.title }}</span>
+      <span class="course-meta">
+        {% if c.lang %}<span class="chip">{{ c.lang|upper }}</span>{% endif %}
+        <span>{{ c.question_count }} {{ t.questions }}</span>
+        <span>{{ c.card_count }} {{ t.cards }}</span>
+        <span>{{ t.updated }} <time datetime="{{ day(c.updated_at) }}">{{ day(c.updated_at) }}</time></span>
+      </span>
+    </a>
+  </li>
+  {% endfor %}
+</ul>
+{% endblock %}

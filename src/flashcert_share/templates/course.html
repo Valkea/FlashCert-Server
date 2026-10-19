@@ -25,6 +25,7 @@
         {% if course.lang %}<span class="chip">{{ course.lang|upper }}</span>{% endif %}
       </span>
       <span class="course-tools">
+        {% if app_link %}<a class="btn small" href="{{ app_link }}" title="{{ t.add_to_app_help }}"><svg class="icon"><use href="#i-plus"/></svg>{{ t.add_to_app }}</a>{% endif %}
         <button type="button" class="btn ghost small" id="copy-link"><svg class="icon"><use href="#i-link"/></svg><span data-t="share"></span></button>
         <button type="button" class="btn ghost small flag-course" data-kind="course" data-id=""><svg class="icon"><use href="#i-flag"/></svg><span data-t="report_short"></span></button>
       </span>
