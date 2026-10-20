@@ -77,11 +77,6 @@ def create_app(config: Config | None = None, engine: Engine | None = None) -> Fl
             return f"{cfg.public_url}/cert/{share_id}"
         return url_for("certification_page", share_id=share_id, _external=True)
 
-    def invite_url(code: str) -> str:
-        if cfg.public_url:
-            return f"{cfg.public_url}/join/{code}"
-        return url_for("join_page", code=code, _external=True)
-
     def app_link(page_url: str) -> str:
         """Opens the page in the FlashCert app, which adds this server by itself."""
         return "flashcert://add?url=" + quote(page_url, safe="")
@@ -391,14 +386,6 @@ def create_app(config: Config | None = None, engine: Engine | None = None) -> Fl
                                app_link=app_link(url) if actions(col.link_actions, col.visibility) else None,
                                day=lambda ms: datetime.fromtimestamp(ms / 1000, tz=timezone.utc).date().isoformat())
 
-    @app.get("/join/<code>")
-    def join_page(code: str):
-        """What the invite gives, and a button that hands it to the app. Opening the page doesn't use it up."""
-        preview = invite_preview(code)
-        if preview is None:
-            return render_template("error.html", message=i18n.strings(ui_lang())["invite_invalid"]), 404
-        return render_template("join.html", invite=preview, app_link=app_link(invite_url(code)))
-
     @app.get("/healthz")
     def healthz():
         with engine.connect() as conn:
@@ -444,39 +431,11 @@ def create_app(config: Config | None = None, engine: Engine | None = None) -> Fl
                              "revision": r.revision, "hash": r.content_hash, "updated_at": iso(r.updated_at)}
                             for r in courses]}
 
-    def invite_preview(code: str) -> dict | None:
-        if not cfg.invites:
-            return None
-        with engine.connect() as conn:
-            inv = db.find_invite(conn, code)
-            if inv is None:
-                return None
-            owner = conn.execute(select(db.token.c.label).where(db.token.c.id == inv.created_by)).scalar_one_or_none()
-            out = {"role": inv.role, "owner": owner or "", "expires_at": iso(inv.expires_at), "server": server_info()}
-            if inv.course_id is not None:
-                row = conn.execute(select(db.course).where(db.course.c.id == inv.course_id)).first()
-                if row is None or row.deleted_at is not None:
-                    return None
-                return {**out, "kind": "course", "title": row.title, "certification": row.certification,
-                        "questions": row.question_count, "cards": row.card_count}
-            col = conn.execute(select(db.collection).where(db.collection.c.id == inv.collection_id)).first()
-            courses = db.collection_courses(conn, col, include_private=True)
-            return {**out, "kind": "certification", "title": col.name, "certification": col.name,
-                    "courses": len(courses), "questions": sum(r.question_count for r in courses),
-                    "cards": sum(r.card_count for r in courses)}
-
-    @app.get("/api/public/invites/<code>")
-    def api_invite(code: str):
-        preview = invite_preview(code)
-        if preview is None:
-            return api_error(404, "this invitation has expired, was revoked or was already used")
-        return preview
-
     @app.post("/api/public/join")
     def api_join():
-        """Redeems an invite ({code}), or joins a shared course or certification as a viewer ({course} or
-        {certification}: its share id) when its link offers it. With a token, that token gets the access; without
-        one, a guest token is made and returned, once."""
+        """Joins a shared course or certification ({course} or {certification}: its share id) as an editor, when its
+        link offers editing. With a token, that token gets the access; without one, a guest token is made and
+        returned, once."""
         body = json_body()
         token_id = None
         if bearer():
@@ -487,36 +446,28 @@ def create_app(config: Config | None = None, engine: Engine | None = None) -> Fl
         if not isinstance(name, str) or len(name) > 100:
             return api_error(400, "name must be at most 100 characters")
         target: dict = {}
-        if isinstance(body.get("code"), str):
-            if not cfg.invites:
-                return api_error(404, "invitations are turned off on this server")
-            target["code"] = body["code"]
-        elif isinstance(body.get("course"), str):
+        if isinstance(body.get("course"), str):
             row = visible_course(body["course"])
             if row is None:
                 return api_error(404, "no such course")
-            offered = actions(row.link_actions, row.visibility)
-            if "join" not in offered and "edit" not in offered:
+            if "edit" not in actions(row.link_actions, row.visibility):
                 return api_error(403, "this course can't be joined from its link")
             target["course_id"] = row.id
-            target["role"] = "editor" if "edit" in offered else "viewer"
         elif isinstance(body.get("certification"), str):
             col = visible_collection(body["certification"])
             if col is None:
                 return api_error(404, "no such certification")
-            offered = actions(col.link_actions, col.visibility)
-            if "join" not in offered and "edit" not in offered:
+            if "edit" not in actions(col.link_actions, col.visibility):
                 return api_error(403, "this certification can't be joined from its link")
             target["collection_id"] = col.id
-            target["role"] = "editor" if "edit" in offered else "viewer"
         else:
-            return api_error(400, "send code, course or certification")
+            return api_error(400, "send course or certification")
         if not join_limiter.allow(request.remote_addr or "?"):
             return api_error(429, "too many joins, try again later")
         try:
             token_id, raw, membership_id = db.join(engine, token_id, name.strip(), **target)
-        except db.InviteInvalid:
-            return api_error(404, "this invitation has expired, was revoked or was already used")
+        except db.Gone:
+            return api_error(404, "no such course")
         info = db.token_info(engine, token_id)
         out = {"token_id": token_id, "label": info.label, "kind": info.kind, "server": server_info(),
                "membership": membership_id}
@@ -569,7 +520,6 @@ def create_app(config: Config | None = None, engine: Engine | None = None) -> Fl
         return {"ok": True, "version": __version__, "courses": courses, "open_reports": reports,
                 "base_url": base_url(), "site_name": cfg.site_name, "token": label, "token_id": g.token_id,
                 "kind": g.token_kind, "safe_sync": 1, "sync_version": 2, "link_actions": list(cfg.link_actions),
-                "invites": cfg.invites,
                 "history_limit": cfg.history_limit, "trash_days": cfg.trash_days,
                 "notes_change_percent": cfg.notes_change_percent, "items_change_percent": cfg.items_change_percent}
 
@@ -807,7 +757,7 @@ def create_app(config: Config | None = None, engine: Engine | None = None) -> Fl
         abort(api_error(400, "name a course (uid) or a certification (name)"))
 
     def membership_out(m, conn) -> dict:
-        out = {"id": m.id, "role": m.role, "via": m.via, "created_at": iso(m.created_at)}
+        out = {"id": m.id, "role": m.role, "created_at": iso(m.created_at)}
         if m.course_id is not None:
             row = conn.execute(select(db.course).where(db.course.c.id == m.course_id)).first()
             out["course"] = {"uid": row.uid, "title": row.title, "certification": row.certification}
@@ -865,67 +815,10 @@ def create_app(config: Config | None = None, engine: Engine | None = None) -> Fl
             conn.execute(db.membership.delete().where(db.membership.c.id == membership_id))
         return "", 204
 
-    def invite_out(inv, code: str | None = None) -> dict:
-        out = {"id": inv.id, "role": inv.role, "uses_left": inv.uses_left, "created_at": iso(inv.created_at),
-               "expires_at": iso(inv.expires_at)}
-        with engine.connect() as conn:
-            if inv.course_id is not None:
-                out["course"] = conn.execute(select(db.course.c.uid).where(db.course.c.id == inv.course_id)).scalar_one()
-            else:
-                out["certification"] = conn.execute(select(db.collection.c.name)
-                                                    .where(db.collection.c.id == inv.collection_id)).scalar_one()
-        if code is not None:
-            out["code"], out["url"] = code, invite_url(code)
-        return out
-
-    @app.post("/api/v1/invites")
-    @require_token
-    def api_create_invite():
-        """{course: uid | certification: name, role, uses (1), days (7, 0: never expires)} → a link to hand over."""
-        if not cfg.invites:
-            return api_error(403, "invitations are turned off on this server")
-        body = json_body()
-        role = body.get("role", "viewer")
-        uses, days = body.get("uses", 1), body.get("days", 7)
-        if role not in MEMBER_ROLES:
-            return api_error(400, "role must be viewer or editor")
-        if type(uses) is not int or not 1 <= uses <= 100:
-            return api_error(400, "uses must be 1 to 100")
-        if type(days) is not int or not 0 <= days <= 365:
-            return api_error(400, "days must be 0 to 365")
-        row, col = target_from(body)
-        expires = db.now_ms() + days * 86_400_000 if days else None
-        invite_id, code = db.create_invite(engine, g.token_id, role, uses, expires,
-                                           course_id=row.id if row is not None else None,
-                                           collection_id=col.id if col is not None else None)
-        with engine.connect() as conn:
-            inv = conn.execute(select(db.invite).where(db.invite.c.id == invite_id)).one()
-        return invite_out(inv, code), 201
-
-    @app.get("/api/v1/invites")
-    @require_token
-    def api_invites():
-        """The owner's invites still usable (their codes are never shown again)."""
-        now = db.now_ms()
-        with engine.connect() as conn:
-            rows = conn.execute(select(db.invite).where(db.invite.c.created_by == g.token_id,
-                                                        db.invite.c.revoked_at.is_(None), db.invite.c.uses_left > 0)
-                                .order_by(db.invite.c.id)).all()
-        return {"invites": [invite_out(r) for r in rows if r.expires_at is None or r.expires_at > now]}
-
-    @app.delete("/api/v1/invites/<int:invite_id>")
-    @require_token
-    def api_revoke_invite(invite_id: int):
-        with engine.begin() as conn:
-            done = conn.execute(db.invite.update().where(db.invite.c.id == invite_id,
-                                                         db.invite.c.created_by == g.token_id)
-                                .values(revoked_at=db.now_ms())).rowcount
-        return ("", 204) if done else api_error(404, "no such invite")
-
     @app.get("/api/v1/certifications")
     @require_token
     def api_certifications():
-        """The owner's certifications shared as a whole (or with invites or members)."""
+        """The owner's certifications shared as a whole (or that have members)."""
         with engine.connect() as conn:
             rows = conn.execute(select(db.collection).where(db.collection.c.owner_id == g.token_id)
                                 .order_by(db.collection.c.name)).all()
@@ -935,7 +828,7 @@ def create_app(config: Config | None = None, engine: Engine | None = None) -> Fl
     @require_token
     def api_share_certification():
         """{name, visibility, link_actions}: a page for the certification (its courses that aren't private), or
-        "private" for members only. The link stays the same."""
+        "private" for none. The link stays the same."""
         body = json_body()
         visibility = body.get("visibility", "unlisted")
         if visibility not in payload.VISIBILITIES:

@@ -1,14 +1,16 @@
-"""Sharing courses and certifications with other people: invites, links that join, roles and the end of access."""
+"""Sharing courses and certifications with other people: links that copy, follow or join to edit, roles and the end
+of access."""
 
 import json
 
-from sqlalchemy import select
+from sqlalchemy import inspect, select, text
 
 from flashcert_share import cli, db
 from flashcert_share.app import create_app
 from flashcert_share.config import Config
 
 V2 = {"X-FlashCert-Sync-Version": "2"}
+EDIT = {"link_actions": ["copy", "follow", "edit"]}
 
 
 def owner(engine, label="alice"):
@@ -22,10 +24,11 @@ def put(client, headers, course, uid="course-1"):
                       headers=headers)
 
 
-def invite(client, headers, **body):
-    r = client.post("/api/v1/invites", json=body, headers=headers)
-    assert r.status_code == 201, r.get_json()
-    return r.get_json()
+def editable(client, headers, course, uid="course-1"):
+    """The course shared privately, its link letting whoever opens it edit it: its share id."""
+    sid = put(client, headers, {**course, "visibility": "unlisted"}, uid=uid).get_json()["share_id"]
+    assert client.patch(f"/api/v1/courses/{uid}", json=EDIT, headers=headers).status_code == 200
+    return sid
 
 
 def join(client, body, headers=None):
@@ -37,51 +40,47 @@ def guest(response):
     return {"Authorization": f"Bearer {body['token']}", **V2}
 
 
-def test_invite_makes_a_guest_who_reads_the_course(client, engine, course):
+def test_joining_from_a_link_makes_a_guest_editor(client, engine, course):
     _, alice = owner(engine)
-    put(client, alice, {**course, "visibility": "private"})
-    inv = invite(client, alice, course="course-1")
-    assert inv["url"] == f"https://share.example.com/join/{inv['code']}" and inv["role"] == "viewer"
-
-    preview = client.get(f"/api/public/invites/{inv['code']}").get_json()
-    assert preview["title"] == "Hooks and guardrails" and preview["owner"] == "alice" and preview["kind"] == "course"
-    page = client.get(f"/join/{inv['code']}")
-    assert page.status_code == 200 and b"flashcert://add?url=https%3A%2F%2Fshare.example.com%2Fjoin%2F" in page.data
-
-    r = join(client, {"code": inv["code"], "name": "bob"})
+    sid = editable(client, alice, course)
+    r = join(client, {"course": sid, "name": "bob"})
     assert r.status_code == 201 and r.get_json()["kind"] == "guest" and r.get_json()["label"] == "bob"
     assert r.get_json()["server"] == {"name": "FlashCert", "url": "https://share.example.com"}
     bob = guest(r)
 
-    listing = client.get("/api/v1/courses", headers=bob).get_json()
-    [shared] = listing["courses"]
-    assert shared["uid"] == "course-1" and shared["role"] == "viewer" and shared["owner"] == "alice"
-    assert "link_actions" not in shared and "open_reports" not in shared
+    [shared] = client.get("/api/v1/courses", headers=bob).get_json()["courses"]
+    assert shared["uid"] == "course-1" and shared["role"] == "editor" and shared["owner"] == "alice"
+    assert "link_actions" not in shared
     body = client.get("/api/v1/courses/course-1", headers=bob).get_json()
-    assert body["content"]["notes"] == course["notes"] and body["role"] == "viewer"
+    assert body["content"]["notes"] == course["notes"] and body["role"] == "editor"
     # Version 1 clients only see their own courses.
     assert client.get("/api/v1/courses", headers={**bob, "X-FlashCert-Sync-Version": "1"}).get_json()["courses"] == []
 
-    # Read only, and a guest can't send courses of its own.
-    r = put(client, bob, {**course, "title": "Mine now"})
-    assert r.status_code == 403 and r.get_json()["code"] == "read_only"
+    # A guest can't send courses of its own, nor decide who sees the course.
     r = put(client, bob, course, uid="bob-1")
     assert r.status_code == 403 and r.get_json()["code"] == "guest"
     assert client.patch("/api/v1/courses/course-1", json={"visibility": "public"}, headers=bob).status_code == 404
     assert client.delete("/api/v1/courses/course-1", headers=bob).status_code == 404
 
-    # Used up: the code and its page are gone.
-    assert join(client, {"code": inv["code"]}).status_code == 404
-    assert client.get(f"/join/{inv['code']}").status_code == 404
-    assert client.get(f"/api/public/invites/{inv['code']}").status_code == 404
+    # Joining again with the token changes nothing; the owner joining their own course neither.
+    assert join(client, {"course": sid}, headers=bob).status_code == 200
+    assert join(client, {"course": sid}, headers=alice).get_json()["membership"] is None
+    assert join(client, {"course": sid}, headers={"Authorization": "Bearer nope"}).status_code == 401
+    assert join(client, {"code": "whatever"}).status_code == 400
+
+    # A link only reaches what is still shared: private again, the access ends.
+    client.patch("/api/v1/courses/course-1", json={"visibility": "private", "expected_revision": 1}, headers=alice)
+    listing = client.get("/api/v1/courses", headers=bob).get_json()
+    assert listing["courses"] == [] and listing["gone"][0]["reason"] == "revoked"
+    assert join(client, {"course": sid}).status_code == 404
 
 
 def test_editor_changes_reach_the_owner_with_their_author(client, engine, course):
     _, alice = owner(engine)
-    first = put(client, alice, {**course, "visibility": "unlisted"}).get_json()
-    client.post(f"/api/public/courses/{first['share_id']}/reports", json={"element": {"kind": "course"}, "message": "Typo"})
+    sid = editable(client, alice, course)
+    client.post(f"/api/public/courses/{sid}/reports", json={"element": {"kind": "course"}, "message": "Typo"})
     _, bob = owner(engine, "bob")
-    r = join(client, {"code": invite(client, alice, course="course-1", role="editor")["code"]}, headers=bob)
+    r = join(client, {"course": sid}, headers=bob)
     assert r.status_code == 200 and "token" not in r.get_json()
 
     edited = {**course, "title": "Hooks, edited", "visibility": "public", "position": 9, "certification": "Other"}
@@ -107,18 +106,23 @@ def test_editor_changes_reach_the_owner_with_their_author(client, engine, course
 
 def test_members_and_the_end_of_their_access(client, engine, course):
     _, alice = owner(engine)
-    put(client, alice, course)
-    put(client, alice, {**course, "title": "Second"}, uid="course-2")
-    bob = guest(join(client, {"code": invite(client, alice, course="course-1", uses=2)["code"], "name": "bob"}))
-    carol = guest(join(client, {"code": invite(client, alice, course="course-2")["code"], "name": "carol"}))
+    first = editable(client, alice, course)
+    second = editable(client, alice, {**course, "title": "Second"}, uid="course-2")
+    bob = guest(join(client, {"course": first, "name": "bob"}))
+    carol = guest(join(client, {"course": second, "name": "carol"}))
     assert [c["uid"] for c in client.get("/api/v1/courses", headers=bob).get_json()["courses"]] == ["course-1"]
 
     members = client.get("/api/v1/members?course=course-1", headers=alice).get_json()["members"]
-    assert [(m["label"], m["role"], m["guest"], m["via"]) for m in members] == [("bob", "viewer", True, "invite")]
-    assert client.patch(f"/api/v1/memberships/{members[0]['id']}", json={"role": "editor"}, headers=bob).status_code == 404
-    assert client.patch(f"/api/v1/memberships/{members[0]['id']}", json={"role": "editor"},
-                        headers=alice).get_json()["role"] == "editor"
-    assert client.get("/api/v1/courses", headers=bob).get_json()["courses"][0]["role"] == "editor"
+    assert [(m["label"], m["role"], m["guest"]) for m in members] == [("bob", "editor", True)]
+    assert "via" not in members[0]
+
+    # The owner can make an editor a viewer, whose edits are then refused.
+    assert client.patch(f"/api/v1/memberships/{members[0]['id']}", json={"role": "viewer"}, headers=bob).status_code == 404
+    assert client.patch(f"/api/v1/memberships/{members[0]['id']}", json={"role": "viewer"},
+                        headers=alice).get_json()["role"] == "viewer"
+    assert client.get("/api/v1/courses", headers=bob).get_json()["courses"][0]["role"] == "viewer"
+    r = put(client, bob, {**course, "title": "Mine now"})
+    assert r.status_code == 403 and r.get_json()["code"] == "read_only"
 
     # Removed: the course comes back as revoked until the end, so devices keep their copy, detached.
     assert client.delete(f"/api/v1/memberships/{members[0]['id']}", headers=alice).status_code == 204
@@ -129,44 +133,20 @@ def test_members_and_the_end_of_their_access(client, engine, course):
     # Leaving, once its devices had the course (before, there is nothing to tell them).
     assert len(client.get("/api/v1/courses", headers=carol).get_json()["courses"]) == 1
     [mine] = client.get("/api/v1/memberships", headers=carol).get_json()["memberships"]
-    assert mine["course"]["uid"] == "course-2" and mine["owner"] == "alice"
+    assert mine["course"]["uid"] == "course-2" and mine["owner"] == "alice" and "via" not in mine
     assert client.delete(f"/api/v1/memberships/{mine['id']}", headers=carol).status_code == 204
     assert client.get("/api/v1/courses", headers=carol).get_json()["gone"][0]["reason"] == "revoked"
 
 
 def test_deleting_a_shared_course_ends_access(client, engine, course):
     _, alice = owner(engine)
-    first = put(client, alice, course).get_json()
-    bob = guest(join(client, {"code": invite(client, alice, course="course-1")["code"]}))
+    bob = guest(join(client, {"course": editable(client, alice, course)}))
     client.get("/api/v1/courses", headers=bob)
-    rev = first["revision"]
+    rev = client.get("/api/v1/courses/course-1", headers=alice).get_json()["revision"]
     assert client.delete(f"/api/v1/courses/course-1?reason=deleted&expected_revision={rev}"
                          f"&confirmation=delete-{rev}-deleted", headers=alice).status_code == 204
     listing = client.get("/api/v1/courses", headers=bob).get_json()
     assert listing["courses"] == [] and listing["gone"][0]["reason"] == "revoked"
-
-
-def test_certification_invite_covers_its_courses_now_and_later(client, engine, course):
-    _, alice = owner(engine)
-    put(client, alice, {**course, "visibility": "private"})
-    put(client, alice, {**course, "title": "Elsewhere", "certification": "Other"}, uid="other")
-    inv = invite(client, alice, certification="Claude Agent SDK", role="editor")
-    assert client.get(f"/api/public/invites/{inv['code']}").get_json()["courses"] == 1
-    bob = guest(join(client, {"code": inv["code"]}))
-    put(client, alice, {**course, "title": "Added later", "visibility": "private"}, uid="course-2")
-
-    listing = client.get("/api/v1/courses", headers=bob).get_json()["courses"]
-    assert sorted((c["uid"], c["role"]) for c in listing) == [("course-1", "editor"), ("course-2", "editor")]
-    [membership] = client.get("/api/v1/memberships", headers=bob).get_json()["memberships"]
-    assert membership["certification"]["name"] == "Claude Agent SDK"
-    members = client.get("/api/v1/members?certification=Claude Agent SDK", headers=alice).get_json()["members"]
-    assert len(members) == 1
-
-    # Moved to another certification by its owner: out of the shared one.
-    put(client, alice, {**course, "title": "Added later", "certification": "Other", "visibility": "private"},
-        uid="course-2")
-    listing = client.get("/api/v1/courses", headers=bob).get_json()
-    assert [c["uid"] for c in listing["courses"]] == ["course-1"] and listing["gone"][0]["uid"] == "course-2"
 
 
 def test_shared_certification_page_lists_its_shared_courses(client, engine, course):
@@ -184,7 +164,7 @@ def test_shared_certification_page_lists_its_shared_courses(client, engine, cour
     public = client.get(f"/api/public/certifications/{cert['share_id']}").get_json()
     assert [c["title"] for c in public["courses"]] == ["Hooks and guardrails"] and public["name"] == "Claude Agent SDK"
 
-    # No join from the link on this server's settings.
+    # No joining from a link that doesn't offer editing.
     assert join(client, {"certification": cert["share_id"]}).status_code == 403
     r = client.put("/api/v1/certifications", json={"name": "Claude Agent SDK", "visibility": "unlisted",
                                                   "link_actions": []}, headers=alice)
@@ -205,10 +185,10 @@ def test_public_course_offers_the_owners_link_actions_and_follows_with_etags(cli
     assert client.get(f"/api/public/courses/{sid}", headers={"If-None-Match": etag}).status_code == 304
     assert b"flashcert://add?url=https%3A%2F%2Fshare.example.com%2Fc%2F" in client.get(f"/c/{sid}").data
 
-    r = client.patch("/api/v1/courses/course-1", json={"link_actions": ["follow", "join"]}, headers=alice)
-    # "join" isn't allowed on this server.
-    assert r.get_json()["link_actions"] == ["follow", "join"] and r.get_json()["actions"] == ["follow"]
-    assert client.patch("/api/v1/courses/course-1", json={"link_actions": ["steal"]}, headers=alice).status_code == 400
+    r = client.patch("/api/v1/courses/course-1", json={"link_actions": ["follow"]}, headers=alice)
+    assert r.get_json()["link_actions"] == ["follow"] and r.get_json()["actions"] == ["follow"]
+    for unknown in (["steal"], ["join"]):
+        assert client.patch("/api/v1/courses/course-1", json={"link_actions": unknown}, headers=alice).status_code == 400
     client.patch("/api/v1/courses/course-1", json={"link_actions": []}, headers=alice)
     assert client.get(f"/api/public/courses/{sid}").get_json()["actions"] == []
     assert b"flashcert://" not in client.get(f"/c/{sid}").data
@@ -217,34 +197,22 @@ def test_public_course_offers_the_owners_link_actions_and_follows_with_etags(cli
     assert client.get(f"/api/public/courses/{sid}", headers={"If-None-Match": etag}).status_code == 200
 
 
-def joining_app(tmp_path, **settings):
+def server(tmp_path, **settings):
     cfg = Config(database_url=f"sqlite:///{tmp_path / 'join.db'}", public_url="https://share.example.com", proxies=0,
-                 link_actions=("copy", "follow", "join"), **settings)
+                 **settings)
     app = create_app(cfg)
-    return app, app.test_client(), app.extensions["flashcert"]["engine"]
+    return app.test_client(), app.extensions["flashcert"]["engine"]
 
 
-def test_joining_from_a_link_when_the_server_allows_it(tmp_path, course):
-    _, client, engine = joining_app(tmp_path)
+def test_the_server_bounds_what_links_offer(tmp_path, course):
+    client, engine = server(tmp_path, link_actions=("copy", "follow"))
     _, alice = owner(engine)
-    sid = put(client, alice, course).get_json()["share_id"]
-    assert client.get(f"/api/public/courses/{sid}").get_json()["actions"] == ["copy", "follow", "join"]
-
-    r = join(client, {"course": sid})
-    assert r.status_code == 201 and r.get_json()["label"] == "guest"
-    bob = guest(r)
-    [shared] = client.get("/api/v1/courses", headers=bob).get_json()["courses"]
-    assert shared["role"] == "viewer"
-    # Joining again with the token changes nothing; the owner joining their own course neither.
-    assert join(client, {"course": sid}, headers=bob).status_code == 200
-    assert join(client, {"course": sid}, headers=alice).get_json()["membership"] is None
-    assert join(client, {"course": sid}, headers={"Authorization": "Bearer nope"}).status_code == 401
-
-    # A link only reaches what is still shared: private again, the access ends.
-    client.patch("/api/v1/courses/course-1", json={"visibility": "private", "expected_revision": 1}, headers=alice)
-    listing = client.get("/api/v1/courses", headers=bob).get_json()
-    assert listing["courses"] == [] and listing["gone"][0]["reason"] == "revoked"
-    assert join(client, {"course": sid}).status_code == 404
+    sid = editable(client, alice, course)
+    r = client.get("/api/v1/courses/course-1", headers=alice).get_json()
+    # The owner's choice is kept; editing isn't allowed on this server.
+    assert r["link_actions"] == ["copy", "follow", "edit"] and r["actions"] == ["copy", "follow"]
+    assert join(client, {"course": sid}).status_code == 403
+    assert client.get("/api/v1/status", headers=alice).get_json()["link_actions"] == ["copy", "follow"]
 
 
 def test_editing_from_a_link_only_when_the_owner_chose_it_and_never_in_public(client, engine, course):
@@ -254,16 +222,12 @@ def test_editing_from_a_link_only_when_the_owner_chose_it_and_never_in_public(cl
     assert client.get(f"/api/public/courses/{sid}").get_json()["actions"] == ["copy", "follow"]
     assert join(client, {"course": sid}).status_code == 403
 
-    r = client.patch("/api/v1/courses/course-1", json={"link_actions": ["copy", "follow", "edit"]}, headers=alice)
+    r = client.patch("/api/v1/courses/course-1", json=EDIT, headers=alice)
     assert r.get_json()["actions"] == ["copy", "follow", "edit"]
     assert client.get(f"/api/public/courses/{sid}").get_json()["actions"] == ["copy", "follow", "edit"]
-    r = join(client, {"course": sid, "name": "bob"})
-    assert r.status_code == 201
-    bob = guest(r)
+    bob = guest(join(client, {"course": sid, "name": "bob"}))
     [shared] = client.get("/api/v1/courses", headers=bob).get_json()["courses"]
     assert shared["role"] == "editor" and shared["owner"] == "alice"
-    [member] = client.get("/api/v1/members?course=course-1", headers=alice).get_json()["members"]
-    assert member["label"] == "bob" and member["role"] == "editor" and member["via"] == "link"
 
     # Listed, anyone can find it: the link no longer makes editors. Those already in stay, removable by the owner.
     client.patch("/api/v1/courses/course-1", json={"visibility": "public", "expected_revision": 1}, headers=alice)
@@ -273,64 +237,49 @@ def test_editing_from_a_link_only_when_the_owner_chose_it_and_never_in_public(cl
     assert shared["role"] == "editor"
 
 
-def test_a_certification_link_can_make_editors_of_its_courses(client, engine, course):
+def test_a_certification_link_covers_its_shared_courses_now_and_later(client, engine, course):
     _, alice = owner(engine)
     put(client, alice, {**course, "visibility": "unlisted"})
     put(client, alice, {**course, "title": "Kept private", "visibility": "private"}, uid="course-2")
-    cert = client.put("/api/v1/certifications", json={"name": "Claude Agent SDK", "visibility": "unlisted",
-                                                     "link_actions": ["copy", "follow", "edit"]}, headers=alice).get_json()
+    put(client, alice, {**course, "title": "Elsewhere", "certification": "Other"}, uid="other")
+    cert = client.put("/api/v1/certifications", json={"name": "Claude Agent SDK", "visibility": "unlisted", **EDIT},
+                      headers=alice).get_json()
     assert cert["actions"] == ["copy", "follow", "edit"]
     assert client.get(f"/api/public/certifications/{cert['share_id']}").get_json()["actions"] == ["copy", "follow", "edit"]
     bob = guest(join(client, {"certification": cert["share_id"]}))
     listing = client.get("/api/v1/courses", headers=bob).get_json()["courses"]
-    # From a link, only what the link shows: the private course stays out.
+    # Only what the link shows: the private course stays out.
     assert [(c["uid"], c["role"]) for c in listing] == [("course-1", "editor")]
+    [membership] = client.get("/api/v1/memberships", headers=bob).get_json()["memberships"]
+    assert membership["certification"]["name"] == "Claude Agent SDK"
+    assert len(client.get("/api/v1/members?certification=Claude Agent SDK", headers=alice).get_json()["members"]) == 1
+
+    # Added later, it comes in; moved to another certification by its owner, it goes out.
+    put(client, alice, {**course, "title": "Added later", "visibility": "unlisted"}, uid="course-3")
+    listing = client.get("/api/v1/courses", headers=bob).get_json()["courses"]
+    assert sorted(c["uid"] for c in listing) == ["course-1", "course-3"]
+    put(client, alice, {**course, "title": "Added later", "certification": "Other", "visibility": "unlisted"},
+        uid="course-3")
+    listing = client.get("/api/v1/courses", headers=bob).get_json()
+    assert [c["uid"] for c in listing["courses"]] == ["course-1"] and listing["gone"][0]["uid"] == "course-3"
 
     public = client.put("/api/v1/certifications", json={"name": "Claude Agent SDK", "visibility": "public"},
                         headers=alice).get_json()
     assert public["actions"] == ["copy", "follow"] and public["link_actions"] == ["copy", "follow", "edit"]
     assert join(client, {"certification": cert["share_id"]}).status_code == 403
 
+    # Not shared any more: those who joined lose its courses.
+    client.put("/api/v1/certifications", json={"name": "Claude Agent SDK", "visibility": "private"}, headers=alice)
+    assert client.get("/api/v1/courses", headers=bob).get_json()["courses"] == []
 
-def test_joins_are_rate_limited_and_invites_can_be_turned_off(tmp_path, course):
-    _, client, engine = joining_app(tmp_path, joins_per_hour=2, invites=False)
+
+def test_joins_are_rate_limited(tmp_path, course):
+    client, engine = server(tmp_path, joins_per_hour=2)
     _, alice = owner(engine)
-    sid = put(client, alice, course).get_json()["share_id"]
-    assert client.post("/api/v1/invites", json={"course": "course-1"}, headers=alice).status_code == 403
-    assert join(client, {"code": "whatever"}).status_code == 404
+    sid = editable(client, alice, course)
     assert join(client, {"course": sid}).status_code == 201
     assert join(client, {"course": sid}).status_code == 201
     assert join(client, {"course": sid}).status_code == 429
-
-
-def test_an_invite_to_a_deleted_course_is_not_used_up(client, engine, course):
-    _, alice = owner(engine)
-    first = put(client, alice, course).get_json()
-    inv = invite(client, alice, course="course-1")
-    rev = first["revision"]
-    client.delete(f"/api/v1/courses/course-1?reason=deleted&expected_revision={rev}&confirmation=delete-{rev}-deleted",
-                  headers=alice)
-    assert join(client, {"code": inv["code"]}).status_code == 404
-    with engine.connect() as conn:
-        assert conn.execute(select(db.invite.c.uses_left)).scalar_one() == 1
-
-
-def test_invites_expire_and_can_be_revoked(client, engine, course):
-    _, alice = owner(engine)
-    put(client, alice, course)
-    old = invite(client, alice, course="course-1")
-    with engine.begin() as conn:
-        conn.execute(db.invite.update().where(db.invite.c.id == old["id"]).values(expires_at=db.now_ms() - 1))
-    assert join(client, {"code": old["code"]}).status_code == 404
-
-    live = invite(client, alice, course="course-1", uses=3, days=0)
-    assert live["expires_at"] is None
-    assert [i["id"] for i in client.get("/api/v1/invites", headers=alice).get_json()["invites"]] == [live["id"]]
-    assert "code" not in client.get("/api/v1/invites", headers=alice).get_json()["invites"][0]
-    assert client.delete(f"/api/v1/invites/{live['id']}", headers=alice).status_code == 204
-    assert join(client, {"code": live["code"]}).status_code == 404
-    assert client.post("/api/v1/invites", json={"course": "course-1", "role": "owner"}, headers=alice).status_code == 400
-    assert client.post("/api/v1/invites", json={"course": "nope"}, headers=alice).status_code == 404
 
 
 def test_a_guest_can_be_promoted(tmp_path, capsys, course):
@@ -338,8 +287,7 @@ def test_a_guest_can_be_promoted(tmp_path, capsys, course):
     app = create_app(Config(database_url=url, public_url="https://share.example.com", proxies=0))
     client, engine = app.test_client(), app.extensions["flashcert"]["engine"]
     _, alice = owner(engine)
-    put(client, alice, course)
-    r = join(client, {"code": invite(client, alice, course="course-1")["code"], "name": "bob"})
+    r = join(client, {"course": editable(client, alice, course), "name": "bob"})
     bob, bob_id = guest(r), r.get_json()["token_id"]
     assert put(client, bob, course, uid="bob-1").status_code == 403
 
@@ -355,8 +303,8 @@ def test_status_tells_the_app_what_the_server_offers(client, engine):
     _, alice = owner(engine)
     status = client.get("/api/v1/status", headers=alice).get_json()
     assert status["sync_version"] == 2 and status["kind"] == "user"
-    assert status["link_actions"] == ["copy", "follow", "edit"]
-    assert status["invites"] is True and status["site_name"] == "FlashCert"
+    assert status["link_actions"] == ["copy", "follow", "edit"] and status["site_name"] == "FlashCert"
+    assert "invites" not in status
 
 
 def test_revisions_remember_their_author(client, engine, course):
@@ -373,23 +321,20 @@ def test_people_choose_the_name_others_see(tmp_path, capsys, course):
     app = create_app(Config(database_url=url, public_url="https://share.example.com", proxies=0))
     client, engine = app.test_client(), app.extensions["flashcert"]["engine"]
     alice_id, alice = owner(engine, label="pixel")
-    put(client, alice, {**course, "visibility": "private"})
+    sid = editable(client, alice, course)
     r = client.patch("/api/v1/me", json={"name": "  Alice Martin "}, headers=alice)
     assert r.status_code == 200 and r.get_json() == {"token_id": alice_id, "name": "Alice Martin"}
     for bad in ({"name": "   "}, {"name": "x" * 101}, {"name": 3}, {}):
         assert client.patch("/api/v1/me", json=bad, headers=alice).status_code == 400
     assert client.patch("/api/v1/me", json={"name": "Eve"}).status_code == 401
 
-    # The owner's name on the invite and on the course it shares.
-    code = invite(client, alice, course="course-1")["code"]
-    assert client.get(f"/api/public/invites/{code}").get_json()["owner"] == "Alice Martin"
-    bob = guest(join(client, {"code": code, "name": "bob"}))
+    # The owner's name on the course it shares.
+    bob = guest(join(client, {"course": sid, "name": "bob"}))
     [shared] = client.get("/api/v1/courses", headers=bob).get_json()["courses"]
     assert shared["owner"] == "Alice Martin"
 
     # A member's name: joining again with a name renames the token, and so does the app's setting.
-    code = invite(client, alice, course="course-1", role="editor")["code"]
-    assert join(client, {"code": code, "name": "Bob Durand"}, bob).status_code == 200
+    assert join(client, {"course": sid, "name": "Bob Durand"}, bob).status_code == 200
 
     def member():
         [m] = client.get("/api/v1/members?course=course-1", headers=alice).get_json()["members"]
@@ -399,9 +344,23 @@ def test_people_choose_the_name_others_see(tmp_path, capsys, course):
     client.patch("/api/v1/me", json={"name": "Robert"}, headers=bob)
     assert member() == "Robert" and client.get("/api/v1/status", headers=bob).get_json()["token"] == "Robert"
     # Without a name, joining keeps it.
-    code = invite(client, alice, course="course-1")["code"]
-    assert join(client, {"code": code}, bob).status_code == 200 and member() == "Robert"
+    assert join(client, {"course": sid}, bob).status_code == 200 and member() == "Robert"
 
     cli.main(["--database-url", url, "token", "rename", str(alice_id), "--label", "Alice"])
     assert "Renamed" in capsys.readouterr().out
     assert client.get("/api/v1/courses", headers=bob).get_json()["courses"][0]["owner"] == "Alice"
+
+
+def test_upgrade_drops_invitations(tmp_path):
+    url = f"sqlite:///{tmp_path / 'v4.db'}"
+    engine = db.make_engine(url)
+    db.init(engine)
+    with engine.begin() as conn:
+        conn.execute(text("CREATE TABLE invite (id INTEGER PRIMARY KEY, hash VARCHAR(64))"))
+        conn.execute(text("ALTER TABLE membership ADD COLUMN via VARCHAR(10) NOT NULL DEFAULT 'invite'"))
+        conn.execute(db.meta.update().values(value="4"))
+    db.init(engine)
+    with engine.connect() as conn:
+        tables = inspect(conn).get_table_names()
+        assert "invite" not in tables and "via" not in {c["name"] for c in inspect(conn).get_columns("membership")}
+        assert conn.execute(select(db.meta.c.value)).scalar_one() == str(db.SCHEMA_VERSION)

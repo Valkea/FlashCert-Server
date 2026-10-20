@@ -10,8 +10,8 @@ generate anything. They can flag an error on any element, and the app collects t
 * `/c/<id>` is one course: **Notes**, **Revision**, **Quiz**, **Cards**. Every answer and card opens the passage of
   the notes it rests on, highlighted, without leaving the quiz.
 * **Add to FlashCert** on a shared course or certification hands it to the app, which adds this server by itself:
-  a copy, a copy that follows the author's changes, or (when allowed) the course itself. Owners can also **invite**
-  someone to read a course or certification, or to edit it with them (see [Sharing with other people](#sharing-with-other-people)).
+  a copy, a copy that follows the author's changes, or (when the owner allows it) the course itself, to edit it with
+  them (see [Sharing with other people](#sharing-with-other-people)).
 * Visitor progress (quiz scores, known cards) stays in the visitor's browser, and only once they agree.
   Turning it on also asks the browser for *persistent storage*; the page explains why.
 * One Docker image (Python, Flask, SQLAlchemy). SQLite by default, PostgreSQL by changing one URL. No CDN.
@@ -130,29 +130,28 @@ server allows (`FLASHCERT_SHARE_LINK_ACTIONS`, `copy,follow,edit` by default):
   the person's own server, under a new id, if they have one.
 * **follow**: a copy that also takes the author's later changes (the app asks with `If-None-Match`). Questions and
   cards keep their ids, so progress on them survives an update; a copy edited on the phone asks before taking one.
-* **join**: the person's app gets a **guest** token and syncs the course itself, read only. Off by default.
-* **edit**: the same join, as an **editor**: the person's changes reach everyone who has the course. Only when the
-  owner chose it (a course that never chose keeps the server's other defaults), and never on a public page: a
-  listed course can be found by anyone. Editors show among the owner's members and can be removed there.
+* **edit**: the person joins the course as an **editor**: their app syncs the course itself, and their changes reach
+  everyone who has it. Someone who already syncs with this server gets the access on their token; anyone else gets
+  a new **guest** token. Only when the owner chose it (a course that never chose keeps the server's other defaults),
+  and never on a public page: a listed course can be found by anyone. Editors show among the owner's members and
+  can be removed there.
 
-**Invites** (on by default, `FLASHCERT_SHARE_INVITES=0` turns them off) are links to `/join/<code>` the owner hands
-to someone: viewer or editor, of a course or of a whole certification, with a number of uses (1 by default) and an
-expiry (7 days by default). Opening the page doesn't use it; the app redeems it. Someone who already syncs with this
-server gets the access on their token; anyone else gets a new guest token.
+The link has no expiry and no count: it works for whoever has it while the course or certification is shared and
+offers it. Stopping the share (private) ends it, and the access of those who joined from it.
 
-* There is **no sign-up**. A guest token only exists because someone redeemed an invite or joined from a link, and
-  it only reaches what it was given: it can't send courses of its own. `token promote ID` turns a guest into a user.
-* **Viewers** sync the course down. **Editors** also send changes: each one is a new revision recorded with its
-  author (`history`), recoverable like the owner's, and editors read the course's error reports. Only the owner
-  decides who sees the course, where it is listed, who is a member, and deletes it.
-* A **certification** is shared from its name: every course of its owner with that certification, now and later.
-  An invite covers its private courses too; a link only the ones that aren't private, and only while the
-  certification itself is shared.
+* There is **no sign-up**. A guest token only exists because someone joined from a link, and it only reaches what
+  it was given: it can't send courses of its own. `token promote ID` turns a guest into a user.
+* **Editors** send changes: each one is a new revision recorded with its author (`history`), recoverable like the
+  owner's, and editors read the course's error reports. An owner can make one a **viewer**
+  (`PATCH /api/v1/memberships/{id}`), who only syncs the course down. Only the owner decides who sees the course,
+  where it is listed, who is a member, and deletes it.
+* A **certification** is shared from its name: every course of its owner with that certification, now and later,
+  except private ones, and only while the certification itself is shared.
 * When access ends (the member is removed or leaves, the course is deleted, made private while joined from its
   link, or moved out of the certification), the member's devices are told the course is `revoked` and keep their
   copy, detached.
 * Study progress never leaves anyone's phone: each person keeps theirs on a shared course.
-* People appear under their token's label: the owner on invites and shared courses, members in the owner's list,
+* People appear under their token's label: the owner on shared courses, members in the owner's list,
   editors in the history. The app sends the name set in its settings (`PATCH /api/v1/me`); a guest token starts
   with the name given when joining.
 
@@ -211,9 +210,8 @@ In `.env` (see [`.env.example`](.env.example)):
 | `FLASHCERT_SHARE_SITE_NAME` | `FlashCert` | Shown in the header and page titles |
 | `FLASHCERT_SHARE_MAX_UPLOAD_MB` | `20` | Largest course the app may upload (keep the proxy's body limit in line) |
 | `FLASHCERT_SHARE_REPORTS_PER_HOUR` | `20` | Error reports allowed per visitor IP per hour |
-| `FLASHCERT_SHARE_LINK_ACTIONS` | `copy,follow,edit` | The most **Add to FlashCert** may offer: any of `copy`, `follow`, `join`, `edit`, or `none`. Owners can offer less; `edit` only when they choose it, never on public pages. |
-| `FLASHCERT_SHARE_INVITES` | `1` | `0` turns invitations off |
-| `FLASHCERT_SHARE_JOINS_PER_HOUR` | `10` | Joins (invite or link) allowed per visitor IP per hour |
+| `FLASHCERT_SHARE_LINK_ACTIONS` | `copy,follow,edit` | The most **Add to FlashCert** may offer: any of `copy`, `follow`, `edit`, or `none`. Owners can offer less; `edit` only when they choose it, never on public pages. |
+| `FLASHCERT_SHARE_JOINS_PER_HOUR` | `10` | Joins from a link allowed per visitor IP per hour |
 | `FLASHCERT_SHARE_PORT` | `8080` | Host port (compose only) |
 | `FLASHCERT_SHARE_IMAGE` | `ghcr.io/valkea/flashcert-share:latest` | Image (compose only) |
 
@@ -334,19 +332,17 @@ summary has a `role` (`owner`, `editor`, `viewer`); shared ones add the `owner`'
 `GET`, `history` and revisions work for members; `PUT`, `preview` and `restore` for editors, whose `PUT` keeps the
 owner's `visibility`, `certification` and `position`. A guest token's `PUT` of a new course answers 403
 `code: guest`; a viewer's 403 `code: read_only`. `/status` adds `sync_version: 2`, `kind` (`user`/`guest`),
-`site_name`, `link_actions` and `invites`.
+`site_name` and `link_actions`.
 
 | | |
 |---|---|
 | `PATCH /api/v1/me` | `{name}` (1–100 characters): this token's label, the name other people see |
 | `PATCH /api/v1/courses/{uid}` | also `{link_actions: [..] \| null}` (the owner) |
-| `POST /api/v1/invites` | `{course: uid \| certification: name, role: viewer\|editor, uses: 1, days: 7}` (0 days: no expiry) → `{id, code, url, …}`; the code is shown once |
-| `GET /api/v1/invites`, `DELETE /api/v1/invites/{id}` | the owner's usable invites; revoke one |
-| `GET /api/v1/members?course=uid` or `?certification=name` | `{members: [{id, token_id, label, guest, role, via, …}]}` |
+| `GET /api/v1/members?course=uid` or `?certification=name` | `{members: [{id, token_id, label, guest, role, …}]}` |
 | `PATCH /api/v1/memberships/{id}` | `{role}` (the owner) |
 | `DELETE /api/v1/memberships/{id}` | the owner removes a member, or the member leaves |
-| `GET /api/v1/memberships` | what was shared with this token: `{id, role, via, owner, course: {uid, title} \| certification: {name, share_id}}` |
-| `PUT /api/v1/certifications` | `{name, visibility, link_actions}` → `{name, share_id, url, visibility, courses, link_actions, actions}`; `private`: members only |
+| `GET /api/v1/memberships` | what was shared with this token: `{id, role, owner, course: {uid, title} \| certification: {name, share_id}}` |
+| `PUT /api/v1/certifications` | `{name, visibility, link_actions}` → `{name, share_id, url, visibility, courses, link_actions, actions}`; `private`: not shared |
 | `GET /api/v1/certifications` | the owner's shared certifications |
 
 `uid` is the app's own stable id for the course (1–100 characters among `A-Z a-z 0-9 . _ : -`), e.g. a UUID
@@ -419,9 +415,8 @@ paused mode applies none. A stale preview must be refreshed, including when a se
 
 `GET /api/public/courses/{share_id}` also gives `url`, `revision`, `hash`, `modified_at`, `position`, `actions` and
 `server: {name, url}`, with an `ETag` (`If-None-Match` answers 304). `GET /api/public/certifications/{share_id}`
-lists a shared certification's courses the same way. `GET /api/public/invites/{code}` previews an invite without
-using it. `POST /api/public/join` takes `{code}`, `{course: share_id}` or `{certification: share_id}` and an
-optional `name`; with a bearer token the access goes to that token (and `name` renames it), otherwise the answer
+lists a shared certification's courses the same way. `POST /api/public/join` takes `{course: share_id}` or
+`{certification: share_id}`, when its link offers `edit`, and an optional `name`; with a bearer token the access goes to that token (and `name` renames it), otherwise the answer
 carries a new guest `token` labelled with `name`, once (201).
 
 `GET /api/public/courses`, `GET /api/public/courses/{share_id}` (what the pages use; private courses answer 404) and

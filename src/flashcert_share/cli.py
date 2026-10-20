@@ -206,7 +206,7 @@ def cmd_copy_db(cfg: Config, args) -> None:
         if target.dialect.name == "postgresql":
             from sqlalchemy import text
 
-            for table in ("token", "course", "report", "collection", "membership", "invite"):  # course_gone: by uid
+            for table in ("token", "course", "report", "collection", "membership"):  # course_gone: by uid
                 dst.execute(text(f"SELECT setval(pg_get_serial_sequence('{table}', 'id'), "
                                  f"COALESCE((SELECT MAX(id) FROM {table}), 0) + 1, false)"))
     print("Done. Point FLASHCERT_SHARE_DATABASE_URL at the new database and restart the server.")

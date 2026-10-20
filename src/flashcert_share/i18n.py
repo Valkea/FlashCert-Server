@@ -23,13 +23,6 @@ STRINGS = {
         "add_to_app": "Add to FlashCert",
         "add_to_app_help": "Opens the FlashCert app on this device. It adds the course and this server by itself.",
         "course_count": "courses",
-        "invite_title": "You're invited",
-        "invite_from": "Shared by",
-        "invite_viewer": "Study it in FlashCert: your copy follows the owner's changes, and your progress stays yours.",
-        "invite_editor": "Work on it with the owner in FlashCert: your changes reach everyone who has it.",
-        "invite_install": "Install FlashCert on your Android phone first, then open this page on it.",
-        "invite_expires": "This invitation expires on",
-        "invite_invalid": "This invitation has expired, was revoked or was already used. Ask for a new one.",
     },
     "fr": {
         "courses": "Cours partagés",
@@ -53,13 +46,6 @@ STRINGS = {
         "add_to_app": "Ajouter à FlashCert",
         "add_to_app_help": "Ouvre l'application FlashCert sur cet appareil. Elle ajoute le cours et ce serveur d'elle-même.",
         "course_count": "cours",
-        "invite_title": "Vous êtes invité",
-        "invite_from": "Partagé par",
-        "invite_viewer": "Révisez-le dans FlashCert : votre copie suit les modifications du propriétaire, et votre progression reste la vôtre.",
-        "invite_editor": "Travaillez-y avec le propriétaire dans FlashCert : vos modifications arrivent chez tous ceux qui l'ont.",
-        "invite_install": "Installez d'abord FlashCert sur votre téléphone Android, puis ouvrez cette page dessus.",
-        "invite_expires": "Cette invitation expire le",
-        "invite_invalid": "Cette invitation a expiré, a été révoquée ou a déjà servi. Demandez-en une nouvelle.",
     },
 }
 
