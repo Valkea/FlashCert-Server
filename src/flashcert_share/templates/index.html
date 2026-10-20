@@ -27,11 +27,12 @@
   </h2>
   <ul class="course-list">
     {% for c in group.courses %}
-    <li class="course-item" data-search="{{ (c.title ~ ' ' ~ (group.name or ''))|lower }}">
+    <li class="course-item" data-search="{{ (c.title ~ ' ' ~ (group.name or '') ~ ' ' ~ authors.get(c.owner_id, ''))|lower }}">
       <a href="{{ url_for('course_page', share_id=c.share_id) }}" data-share-id="{{ c.share_id }}" data-cards="{{ c.card_count }}">
         <span class="course-title">{{ c.title }}</span>
         <span class="course-meta">
           {% if c.lang %}<span class="chip">{{ c.lang|upper }}</span>{% endif %}
+          {% if authors.get(c.owner_id) %}<span class="author">{{ t.shared_by }} {{ authors[c.owner_id] }}</span>{% endif %}
           <span>{{ c.question_count }} {{ t.questions }}</span>
           <span>{{ c.card_count }} {{ t.cards }}</span>
           <span>{{ t.updated }} <time datetime="{{ day(c.updated_at) }}">{{ day(c.updated_at) }}</time></span>

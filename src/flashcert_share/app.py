@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+import zlib
 from datetime import datetime, timezone
 from functools import wraps
 from pathlib import Path
@@ -266,11 +267,16 @@ def create_app(config: Config | None = None, engine: Engine | None = None) -> Fl
             out["open_reports"] = open_reports
         return out
 
+    def author(owner_id: int | None) -> str:
+        """The name of who shares it, as they chose it in the app; empty for a course with no owner."""
+        return labels([owner_id]).get(owner_id, "")
+
     def public_course(row) -> dict:
         return {
             "share_id": row.share_id,
             "url": share_url(row.share_id),
             "title": row.title,
+            "author": author(row.owner_id),
             "certification": row.certification,
             "lang": row.lang,
             "position": row.position,
@@ -303,7 +309,7 @@ def create_app(config: Config | None = None, engine: Engine | None = None) -> Fl
             rows = conn.execute(
                 select(db.course.c.share_id, db.course.c.title, db.course.c.certification, db.course.c.lang,
                        db.course.c.question_count, db.course.c.card_count, db.course.c.updated_at,
-                       db.course.c.position)
+                       db.course.c.position, db.course.c.owner_id)
                 .where(db.course.c.visibility == "public", db.course.c.deleted_at.is_(None))
             ).all()
         rows.sort(key=lambda r: (r.certification is None, (r.certification or "").casefold(),
@@ -346,11 +352,12 @@ def create_app(config: Config | None = None, engine: Engine | None = None) -> Fl
     @app.get("/")
     def index():
         groups: list[dict] = []
-        for row in public_list():
+        rows = public_list()
+        for row in rows:
             if not groups or groups[-1]["name"] != row.certification:
                 groups.append({"name": row.certification, "courses": []})
             groups[-1]["courses"].append(row)
-        return render_template("index.html", groups=groups,
+        return render_template("index.html", groups=groups, authors=labels(r.owner_id for r in rows),
                                day=lambda ms: datetime.fromtimestamp(ms / 1000, tz=timezone.utc).date().isoformat())
 
     @app.get("/c/<share_id>")
@@ -382,7 +389,7 @@ def create_app(config: Config | None = None, engine: Engine | None = None) -> Fl
             courses = db.collection_courses(conn, col, include_private=False)
         url = certification_url(col.share_id)
         return render_template("certification.html", name=col.name, courses=courses, url=url,
-                               unlisted=col.visibility != "public",
+                               author=author(col.owner_id), unlisted=col.visibility != "public",
                                app_link=app_link(url) if actions(col.link_actions, col.visibility) else None,
                                day=lambda ms: datetime.fromtimestamp(ms / 1000, tz=timezone.utc).date().isoformat())
 
@@ -413,8 +420,11 @@ def create_app(config: Config | None = None, engine: Engine | None = None) -> Fl
         row = visible_course(share_id)
         if row is None:
             return api_error(404, "no such course")
-        response = jsonify(public_course(row))
-        response.set_etag(f"{row.content_hash[:20]}-{row.revision}-{row.link_actions or ''}")
+        body = public_course(row)
+        response = jsonify(body)
+        # Who shares it can rename themselves: the answer changes with them.
+        signed = zlib.crc32(body["author"].encode("utf-8"))
+        response.set_etag(f"{row.content_hash[:20]}-{row.revision}-{row.link_actions or ''}-{signed:x}")
         return response.make_conditional(request)
 
     @app.get("/api/public/certifications/<share_id>")
@@ -425,7 +435,8 @@ def create_app(config: Config | None = None, engine: Engine | None = None) -> Fl
         with engine.connect() as conn:
             courses = db.collection_courses(conn, col, include_private=False)
         return {"share_id": col.share_id, "url": certification_url(col.share_id), "name": col.name,
-                "actions": actions(col.link_actions, col.visibility), "server": server_info(),
+                "author": author(col.owner_id), "actions": actions(col.link_actions, col.visibility),
+                "server": server_info(),
                 "courses": [{"share_id": r.share_id, "url": share_url(r.share_id), "title": r.title, "lang": r.lang,
                              "position": r.position, "questions": r.question_count, "cards": r.card_count,
                              "revision": r.revision, "hash": r.content_hash, "updated_at": iso(r.updated_at)}

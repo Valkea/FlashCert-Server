@@ -328,7 +328,22 @@ def test_people_choose_the_name_others_see(tmp_path, capsys, course):
         assert client.patch("/api/v1/me", json=bad, headers=alice).status_code == 400
     assert client.patch("/api/v1/me", json={"name": "Eve"}).status_code == 401
 
-    # The owner's name on the course it shares.
+    # The owner's name on the course it shares: its page, its public answer (whose ETag follows it) and the app.
+    assert b"Shared by Alice Martin" in client.get(f"/c/{sid}").data
+    r = client.get(f"/api/public/courses/{sid}")
+    assert r.get_json()["author"] == "Alice Martin"
+    etag = r.headers["ETag"]
+    client.patch("/api/v1/me", json={"name": "Alice M."}, headers=alice)
+    assert client.get(f"/api/public/courses/{sid}", headers={"If-None-Match": etag}).status_code == 200
+    client.patch("/api/v1/me", json={"name": "Alice Martin"}, headers=alice)
+    cert = client.put("/api/v1/certifications", json={"name": "Claude Agent SDK", "visibility": "unlisted"},
+                      headers=alice).get_json()
+    assert client.get(f"/api/public/certifications/{cert['share_id']}").get_json()["author"] == "Alice Martin"
+    assert "Partagé par Alice Martin" in client.get(f"/cert/{cert['share_id']}",
+                                                     headers={"Accept-Language": "fr"}).get_data(as_text=True)
+    put(client, alice, {**course, "title": "Listed one"}, uid="listed")
+    home = client.get("/").get_data(as_text=True)
+    assert "Shared by Alice Martin" in home and 'data-search="listed one claude agent sdk alice martin"' in home
     bob = guest(join(client, {"course": sid, "name": "bob"}))
     [shared] = client.get("/api/v1/courses", headers=bob).get_json()["courses"]
     assert shared["owner"] == "Alice Martin"

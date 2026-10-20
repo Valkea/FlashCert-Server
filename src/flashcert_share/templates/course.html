@@ -23,6 +23,7 @@
     <div class="course-bar">
       <span class="course-meta" id="course-meta">
         {% if course.lang %}<span class="chip">{{ course.lang|upper }}</span>{% endif %}
+        {% if course.author %}<span class="author">{{ t.shared_by }} {{ course.author }}</span>{% endif %}
       </span>
       <span class="course-tools">
         {% if app_link %}<a class="btn small" href="{{ app_link }}" title="{{ t.add_to_app_help }}"><svg class="icon"><use href="#i-plus"/></svg>{{ t.add_to_app }}</a>{% endif %}
