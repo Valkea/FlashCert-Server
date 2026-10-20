@@ -683,12 +683,12 @@ class InviteInvalid(Exception):
 
 
 def join(engine: Engine, token_id: int | None, label: str, *, code: str | None = None, course_id: int | None = None,
-         collection_id: int | None = None) -> tuple[int, str | None, int | None]:
-    """Gives access through an invite code, or as a viewer through a shared link (``course_id``/``collection_id``,
-    checked by the caller). Without ``token_id`` a guest token is made; with one, a ``label`` renames it. Returns
-    (token id, new raw token or None, membership id; None when the token already owns what it joined)."""
+         collection_id: int | None = None, role: str = "viewer") -> tuple[int, str | None, int | None]:
+    """Gives access through an invite code, or with ``role`` through a shared link (``course_id``/``collection_id``,
+    checked by the caller, as the role is). Without ``token_id`` a guest token is made; with one, a ``label`` renames
+    it. Returns (token id, new raw token or None, membership id; None when the token already owns what it joined)."""
     with engine.begin() as conn:
-        role, via = "viewer", "link"
+        via = "link"
         if code is not None:
             inv = conn.execute(select(invite).where(invite.c.hash == hash_token(code), _valid_invite())
                                .with_for_update()).first()

@@ -247,6 +247,51 @@ def test_joining_from_a_link_when_the_server_allows_it(tmp_path, course):
     assert join(client, {"course": sid}).status_code == 404
 
 
+def test_editing_from_a_link_only_when_the_owner_chose_it_and_never_in_public(client, engine, course):
+    _, alice = owner(engine)
+    sid = put(client, alice, {**course, "visibility": "unlisted"}).get_json()["share_id"]
+    # Allowed by the server, but never part of its default: a course that didn't choose offers no editing.
+    assert client.get(f"/api/public/courses/{sid}").get_json()["actions"] == ["copy", "follow"]
+    assert join(client, {"course": sid}).status_code == 403
+
+    r = client.patch("/api/v1/courses/course-1", json={"link_actions": ["copy", "follow", "edit"]}, headers=alice)
+    assert r.get_json()["actions"] == ["copy", "follow", "edit"]
+    assert client.get(f"/api/public/courses/{sid}").get_json()["actions"] == ["copy", "follow", "edit"]
+    r = join(client, {"course": sid, "name": "bob"})
+    assert r.status_code == 201
+    bob = guest(r)
+    [shared] = client.get("/api/v1/courses", headers=bob).get_json()["courses"]
+    assert shared["role"] == "editor" and shared["owner"] == "alice"
+    [member] = client.get("/api/v1/members?course=course-1", headers=alice).get_json()["members"]
+    assert member["label"] == "bob" and member["role"] == "editor" and member["via"] == "link"
+
+    # Listed, anyone can find it: the link no longer makes editors. Those already in stay, removable by the owner.
+    client.patch("/api/v1/courses/course-1", json={"visibility": "public", "expected_revision": 1}, headers=alice)
+    assert client.get(f"/api/public/courses/{sid}").get_json()["actions"] == ["copy", "follow"]
+    assert join(client, {"course": sid}).status_code == 403
+    [shared] = client.get("/api/v1/courses", headers=bob).get_json()["courses"]
+    assert shared["role"] == "editor"
+
+
+def test_a_certification_link_can_make_editors_of_its_courses(client, engine, course):
+    _, alice = owner(engine)
+    put(client, alice, {**course, "visibility": "unlisted"})
+    put(client, alice, {**course, "title": "Kept private", "visibility": "private"}, uid="course-2")
+    cert = client.put("/api/v1/certifications", json={"name": "Claude Agent SDK", "visibility": "unlisted",
+                                                     "link_actions": ["copy", "follow", "edit"]}, headers=alice).get_json()
+    assert cert["actions"] == ["copy", "follow", "edit"]
+    assert client.get(f"/api/public/certifications/{cert['share_id']}").get_json()["actions"] == ["copy", "follow", "edit"]
+    bob = guest(join(client, {"certification": cert["share_id"]}))
+    listing = client.get("/api/v1/courses", headers=bob).get_json()["courses"]
+    # From a link, only what the link shows: the private course stays out.
+    assert [(c["uid"], c["role"]) for c in listing] == [("course-1", "editor")]
+
+    public = client.put("/api/v1/certifications", json={"name": "Claude Agent SDK", "visibility": "public"},
+                        headers=alice).get_json()
+    assert public["actions"] == ["copy", "follow"] and public["link_actions"] == ["copy", "follow", "edit"]
+    assert join(client, {"certification": cert["share_id"]}).status_code == 403
+
+
 def test_joins_are_rate_limited_and_invites_can_be_turned_off(tmp_path, course):
     _, client, engine = joining_app(tmp_path, joins_per_hour=2, invites=False)
     _, alice = owner(engine)
@@ -309,7 +354,8 @@ def test_a_guest_can_be_promoted(tmp_path, capsys, course):
 def test_status_tells_the_app_what_the_server_offers(client, engine):
     _, alice = owner(engine)
     status = client.get("/api/v1/status", headers=alice).get_json()
-    assert status["sync_version"] == 2 and status["kind"] == "user" and status["link_actions"] == ["copy", "follow"]
+    assert status["sync_version"] == 2 and status["kind"] == "user"
+    assert status["link_actions"] == ["copy", "follow", "edit"]
     assert status["invites"] is True and status["site_name"] == "FlashCert"
 
 

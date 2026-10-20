@@ -89,12 +89,16 @@ def create_app(config: Config | None = None, engine: Engine | None = None) -> Fl
     def server_info() -> dict:
         return {"name": cfg.site_name, "url": base_url()}
 
-    def actions(chosen: str | None) -> list[str]:
-        """What a shared link offers in the app: the owner's choice within what the server allows."""
+    def actions(chosen: str | None, visibility: str | None) -> list[str]:
+        """What a shared link offers in the app: the owner's choice within what the server allows. Editing is never
+        part of the server's default, only of the owner's choice, and a public page, which anyone can find, never
+        offers it."""
         if chosen is None:
-            return list(cfg.link_actions)
-        picked = link_actions(chosen)
-        return [a for a in cfg.link_actions if a in picked]
+            offered = [a for a in cfg.link_actions if a != "edit"]
+        else:
+            picked = link_actions(chosen)
+            offered = [a for a in cfg.link_actions if a in picked]
+        return [a for a in offered if a != "edit" or visibility != "public"]
 
     def stored_actions(value):
         """A link_actions value from the app (a list, or null for the server's default) as stored, or abort."""
@@ -234,7 +238,7 @@ def create_app(config: Config | None = None, engine: Engine | None = None) -> Fl
         return {"name": row.name, "share_id": row.share_id, "url": certification_url(row.share_id),
                 "visibility": row.visibility, "courses": [c.uid for c in courses],
                 "link_actions": None if row.link_actions is None else link_actions(row.link_actions),
-                "actions": actions(row.link_actions)}
+                "actions": actions(row.link_actions, row.visibility)}
 
     def course_summary(row, open_reports: int | None = None, role: str = "owner", owner: str | None = None) -> dict:
         out = {
@@ -262,7 +266,7 @@ def create_app(config: Config | None = None, engine: Engine | None = None) -> Fl
         if role == "owner":
             chosen = getattr(row, "link_actions", None)
             out["link_actions"] = None if chosen is None else list(link_actions(chosen))
-            out["actions"] = actions(chosen)
+            out["actions"] = actions(chosen, row.visibility)
         if open_reports is not None:
             out["open_reports"] = open_reports
         return out
@@ -279,7 +283,7 @@ def create_app(config: Config | None = None, engine: Engine | None = None) -> Fl
             "modified_at": iso(row.modified_at or row.updated_at),
             "revision": row.revision,
             "hash": row.content_hash,
-            "actions": actions(row.link_actions),
+            "actions": actions(row.link_actions, row.visibility),
             "server": server_info(),
             **payload.shown(json.loads(row.content)),
         }
@@ -371,7 +375,7 @@ def create_app(config: Config | None = None, engine: Engine | None = None) -> Fl
             description=description[:300],
             url=share_url(row.share_id),
             unlisted=row.visibility != "public",
-            app_link=app_link(share_url(row.share_id)) if actions(row.link_actions) else None,
+            app_link=app_link(share_url(row.share_id)) if actions(row.link_actions, row.visibility) else None,
         )
 
     @app.get("/cert/<share_id>")
@@ -384,7 +388,7 @@ def create_app(config: Config | None = None, engine: Engine | None = None) -> Fl
         url = certification_url(col.share_id)
         return render_template("certification.html", name=col.name, courses=courses, url=url,
                                unlisted=col.visibility != "public",
-                               app_link=app_link(url) if actions(col.link_actions) else None,
+                               app_link=app_link(url) if actions(col.link_actions, col.visibility) else None,
                                day=lambda ms: datetime.fromtimestamp(ms / 1000, tz=timezone.utc).date().isoformat())
 
     @app.get("/join/<code>")
@@ -434,7 +438,7 @@ def create_app(config: Config | None = None, engine: Engine | None = None) -> Fl
         with engine.connect() as conn:
             courses = db.collection_courses(conn, col, include_private=False)
         return {"share_id": col.share_id, "url": certification_url(col.share_id), "name": col.name,
-                "actions": actions(col.link_actions), "server": server_info(),
+                "actions": actions(col.link_actions, col.visibility), "server": server_info(),
                 "courses": [{"share_id": r.share_id, "url": share_url(r.share_id), "title": r.title, "lang": r.lang,
                              "position": r.position, "questions": r.question_count, "cards": r.card_count,
                              "revision": r.revision, "hash": r.content_hash, "updated_at": iso(r.updated_at)}
@@ -491,16 +495,20 @@ def create_app(config: Config | None = None, engine: Engine | None = None) -> Fl
             row = visible_course(body["course"])
             if row is None:
                 return api_error(404, "no such course")
-            if "join" not in actions(row.link_actions):
+            offered = actions(row.link_actions, row.visibility)
+            if "join" not in offered and "edit" not in offered:
                 return api_error(403, "this course can't be joined from its link")
             target["course_id"] = row.id
+            target["role"] = "editor" if "edit" in offered else "viewer"
         elif isinstance(body.get("certification"), str):
             col = visible_collection(body["certification"])
             if col is None:
                 return api_error(404, "no such certification")
-            if "join" not in actions(col.link_actions):
+            offered = actions(col.link_actions, col.visibility)
+            if "join" not in offered and "edit" not in offered:
                 return api_error(403, "this certification can't be joined from its link")
             target["collection_id"] = col.id
+            target["role"] = "editor" if "edit" in offered else "viewer"
         else:
             return api_error(400, "send code, course or certification")
         if not join_limiter.allow(request.remote_addr or "?"):

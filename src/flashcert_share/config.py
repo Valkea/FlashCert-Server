@@ -7,8 +7,9 @@ from dataclasses import dataclass
 from pathlib import Path
 
 PREFIX = "FLASHCERT_SHARE_"
-#: What the app may offer on a shared page: take a copy, a copy that follows the author's changes, or join the course.
-LINK_ACTIONS = ("copy", "follow", "join")
+#: What the app may offer on a shared page: take a copy, a copy that follows the author's changes, join the course to
+#: study it, or join it to edit it. Editing comes only from the owner's own choice, and never on a public page.
+LINK_ACTIONS = ("copy", "follow", "join", "edit")
 
 
 def _env(name: str, default: str | None = None) -> str | None:
@@ -47,7 +48,7 @@ class Config:
     notes_change_percent: int = 30
     items_change_percent: int = 20
     #: The most a shared link may offer in the app; each owner can offer less per course or certification.
-    link_actions: tuple[str, ...] = ("copy", "follow")
+    link_actions: tuple[str, ...] = ("copy", "follow", "edit")
     #: Owners can invite people to their courses and certifications.
     invites: bool = True
     #: Joins (invite or link) allowed per visitor IP per hour.
@@ -71,7 +72,7 @@ class Config:
             trash_days=max(1, int(_env("TRASH_DAYS", "30"))),
             notes_change_percent=max(1, min(100, int(_env("NOTES_CHANGE_PERCENT", "30")))),
             items_change_percent=max(1, min(100, int(_env("ITEMS_CHANGE_PERCENT", "20")))),
-            link_actions=link_actions(_env("LINK_ACTIONS", "copy,follow")),
+            link_actions=link_actions(_env("LINK_ACTIONS", "copy,follow,edit")),
             invites=_env("INVITES", "1") not in ("0", "false", "no", "off"),
             joins_per_hour=int(_env("JOINS_PER_HOUR", "10")),
         )

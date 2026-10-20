@@ -124,13 +124,16 @@ course's owner, and `owner TOKEN_ID UID…` sets it by hand.
 A link to a course (`/c/<id>`) or to a whole certification (`/cert/<id>`) has an **Add to FlashCert** button. It
 opens the app (`flashcert://add?url=<the page>`), which adds this server to its list by itself: nobody types an
 address or a token. What the button offers is the owner's choice for that course or certification, within what the
-server allows (`FLASHCERT_SHARE_LINK_ACTIONS`, `copy,follow` by default):
+server allows (`FLASHCERT_SHARE_LINK_ACTIONS`, `copy,follow,edit` by default):
 
 * **copy**: the app makes a course of its own from the page. Edits to it never touch the original; it backs up to
   the person's own server, under a new id, if they have one.
 * **follow**: a copy that also takes the author's later changes (the app asks with `If-None-Match`). Questions and
   cards keep their ids, so progress on them survives an update; a copy edited on the phone asks before taking one.
 * **join**: the person's app gets a **guest** token and syncs the course itself, read only. Off by default.
+* **edit**: the same join, as an **editor**: the person's changes reach everyone who has the course. Only when the
+  owner chose it (a course that never chose keeps the server's other defaults), and never on a public page: a
+  listed course can be found by anyone. Editors show among the owner's members and can be removed there.
 
 **Invites** (on by default, `FLASHCERT_SHARE_INVITES=0` turns them off) are links to `/join/<code>` the owner hands
 to someone: viewer or editor, of a course or of a whole certification, with a number of uses (1 by default) and an
@@ -208,7 +211,7 @@ In `.env` (see [`.env.example`](.env.example)):
 | `FLASHCERT_SHARE_SITE_NAME` | `FlashCert` | Shown in the header and page titles |
 | `FLASHCERT_SHARE_MAX_UPLOAD_MB` | `20` | Largest course the app may upload (keep the proxy's body limit in line) |
 | `FLASHCERT_SHARE_REPORTS_PER_HOUR` | `20` | Error reports allowed per visitor IP per hour |
-| `FLASHCERT_SHARE_LINK_ACTIONS` | `copy,follow` | The most **Add to FlashCert** may offer: any of `copy`, `follow`, `join`, or `none`. Owners can offer less. |
+| `FLASHCERT_SHARE_LINK_ACTIONS` | `copy,follow,edit` | The most **Add to FlashCert** may offer: any of `copy`, `follow`, `join`, `edit`, or `none`. Owners can offer less; `edit` only when they choose it, never on public pages. |
 | `FLASHCERT_SHARE_INVITES` | `1` | `0` turns invitations off |
 | `FLASHCERT_SHARE_JOINS_PER_HOUR` | `10` | Joins (invite or link) allowed per visitor IP per hour |
 | `FLASHCERT_SHARE_PORT` | `8080` | Host port (compose only) |
