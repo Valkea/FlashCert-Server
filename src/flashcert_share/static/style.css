@@ -89,7 +89,7 @@ a { color: var(--accent-text); }
 }
 .icon-button:hover:not(:disabled) { background: var(--surface-alt); color: var(--text); }
 .icon-button:disabled { opacity: 0.3; cursor: default; }
-:focus-visible { outline: 3px solid color-mix(in srgb, var(--accent) 55%, transparent); outline-offset: 2px; }
+:focus-visible { outline: 3px solid color-mix(in srgb, var(--accent-text) 55%, transparent); outline-offset: 2px; }
 
 .chip {
   display: inline-flex; align-items: center; gap: 4px;
@@ -97,7 +97,7 @@ a { color: var(--accent-text); }
   background: var(--surface-alt); color: var(--muted); border: 1px solid transparent;
 }
 .chip.link { cursor: pointer; color: var(--accent-text); background: var(--accent-soft); font: inherit; font-size: 13px; font-weight: 600; }
-.chip.link.active { border-color: var(--accent); }
+.chip.link.active { border-color: var(--accent-text); }
 .chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0; }
 
 .card {
@@ -126,7 +126,7 @@ a { color: var(--accent-text); }
   background: var(--surface); border: 1px solid var(--stroke); color: var(--text); text-decoration: none;
   box-shadow: var(--shadow); transition: border-color 0.15s, transform 0.15s;
 }
-.course-item a:hover { border-color: var(--accent); }
+.course-item a:hover { border-color: var(--accent-text); }
 .course-title { font-weight: 650; font-size: 17px; line-height: 1.35; }
 .course-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 14px; color: var(--muted); font-size: 14px; }
 .course-progress { color: var(--good); font-size: 14px; font-weight: 600; }
@@ -241,7 +241,7 @@ mark { background: var(--mark); color: inherit; border-radius: 3px; padding: 0 1
   min-height: 40px; padding: 0 14px; border-radius: 999px; border: 1px solid var(--stroke);
   background: var(--surface); color: var(--text); font: inherit; font-weight: 600; cursor: pointer;
 }
-.segmented button[aria-checked="true"], .segmented button[aria-pressed="true"] { border-color: var(--accent); background: var(--accent-soft); color: var(--accent-text); }
+.segmented button[aria-checked="true"], .segmented button[aria-pressed="true"] { border-color: var(--accent-text); background: var(--accent-soft); color: var(--accent-text); }
 .segmented.importance { margin: 0 0 12px; }
 .segmented.importance button { min-height: 34px; padding: 0 12px; font-size: 14px; }
 /* Lines of the notes outside the chosen importance levels, at the app's opacity for disabled content. */
@@ -256,7 +256,7 @@ h3.label { margin: 28px 0 8px; }
 
 .quiz-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 8px; }
 .progressbar { height: 6px; background: var(--surface-alt); border-radius: 999px; overflow: hidden; margin-bottom: 16px; }
-.progressbar span { display: block; height: 100%; background: var(--accent); border-radius: 999px; transition: width 0.3s; }
+.progressbar span { display: block; height: 100%; background: var(--secondary); border-radius: 999px; transition: width 0.3s; }
 .question-top { display: flex; justify-content: space-between; align-items: flex-start; gap: 8px; }
 .question-main { flex: 1; min-width: 0; }
 .place {
@@ -265,7 +265,7 @@ h3.label { margin: 28px 0 8px; }
 }
 .stem { font-size: 18px; font-weight: 600; line-height: 1.5; margin-bottom: 16px; }
 .blank {
-  display: inline-block; min-width: 4em; padding: 0 6px; border-bottom: 2px solid var(--accent);
+  display: inline-block; min-width: 4em; padding: 0 6px; border-bottom: 2px solid var(--accent-text);
   color: var(--accent-text); text-align: center;
 }
 .blank.right { border-color: var(--good); color: var(--good); }
@@ -278,14 +278,14 @@ h3.label { margin: 28px 0 8px; }
   background: var(--surface); color: var(--text); font: inherit; cursor: pointer; line-height: 1.45;
 }
 .options.two .option { justify-content: center; font-weight: 650; align-items: center; }
-.option:hover:not(:disabled) { border-color: var(--accent); }
+.option:hover:not(:disabled) { border-color: var(--accent-text); }
 .option:disabled { cursor: default; }
 .option .letter, .option .box {
   flex: none; display: inline-grid; place-items: center; width: 28px; height: 28px; border-radius: 8px;
   background: var(--surface-alt); color: var(--muted); font-weight: 700; font-size: 14px;
 }
 .option .box .icon { opacity: 0; width: 16px; height: 16px; }
-.option[aria-pressed="true"] { border-color: var(--accent); background: var(--accent-soft); }
+.option[aria-pressed="true"] { border-color: var(--accent-text); background: var(--accent-soft); }
 .option[aria-pressed="true"] .box { background: var(--accent); color: var(--on-accent); }
 .option[aria-pressed="true"] .box .icon { opacity: 1; }
 .option.right { border-color: var(--good); background: var(--good-soft); }
@@ -299,7 +299,7 @@ h3.label { margin: 28px 0 8px; }
   min-height: 40px; padding: 0 14px; font: inherit; font-weight: 600; font-size: 15px; cursor: pointer;
   background: var(--surface); color: var(--text); border: 1.5px solid var(--stroke); border-radius: 10px;
 }
-.chip.word:hover:not(:disabled) { border-color: var(--accent); }
+.chip.word:hover:not(:disabled) { border-color: var(--accent-text); }
 .chip.word.right { border-color: var(--good); background: var(--good-soft); color: var(--good); }
 .chip.word.wrong { border-color: var(--bad); background: var(--bad-soft); color: var(--bad); }
 .cloze-type { display: flex; gap: 8px; }
@@ -307,7 +307,7 @@ h3.label { margin: 28px 0 8px; }
   flex: 1; min-width: 0; min-height: 44px; padding: 10px 12px; border-radius: 10px; border: 1.5px solid var(--stroke);
   background: var(--surface); color: var(--text); font: inherit;
 }
-.cloze-input:focus, .field input:focus, .field textarea:focus { border-color: var(--accent); outline: none; }
+.cloze-input:focus, .field input:focus, .field textarea:focus { border-color: var(--accent-text); outline: none; }
 .order-list { list-style: none; counter-reset: ord; padding: 0; margin: 0; display: grid; gap: 8px; }
 .order-item {
   counter-increment: ord; display: flex; align-items: center; gap: 10px;
@@ -354,7 +354,7 @@ h3.label { margin: 28px 0 8px; }
 }
 .flashcard .place { align-self: center; margin: 0 28px; text-align: center; }
 .flashcard .front { font-size: 20px; font-weight: 650; line-height: 1.45; }
-.flashcard.flipped { cursor: default; border-color: var(--accent); }
+.flashcard.flipped { cursor: default; border-color: var(--accent-text); }
 .flashcard.flipped .front { font-size: 16px; color: var(--muted); font-weight: 600; }
 .flashcard .back { font-size: 17px; text-align: left; padding-top: 14px; border-top: 1px dashed var(--stroke); }
 .flashcard .back .md > :last-child, .flashcard .front .md > :last-child { margin-bottom: 0; }
