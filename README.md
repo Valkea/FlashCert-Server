@@ -145,8 +145,9 @@ offers it. Stopping the share (private) ends it, and the access of those who joi
   owner's, and editors read the course's error reports. An owner can make one a **viewer**
   (`PATCH /api/v1/memberships/{id}`), who only syncs the course down. Only the owner decides who sees the course,
   where it is listed, who is a member, and deletes it.
-* A **certification** is shared from its name: every course of its owner with that certification, now and later,
-  except private ones, and only while the certification itself is shared.
+* A **certification** is shared as a whole: every course of its owner in that certification, now and later,
+  except private ones, and only while the certification itself is shared. Renamed in the app, it keeps its link
+  and the people it is shared with.
 * When access ends (the member is removed or leaves, the course is deleted, made private while joined from its
   link, or moved out of the certification), the member's devices are told the course is `revoked` and keep their
   copy, detached.
@@ -332,18 +333,27 @@ summary has a `role` (`owner`, `editor`, `viewer`); shared ones add the `owner`'
 `GET`, `history` and revisions work for members; `PUT`, `preview` and `restore` for editors, whose `PUT` keeps the
 owner's `visibility`, `certification` and `position`. A guest token's `PUT` of a new course answers 403
 `code: guest`; a viewer's 403 `code: read_only`. `/status` adds `sync_version: 2`, `kind` (`user`/`guest`),
-`site_name` and `link_actions`.
+`site_name`, `link_actions` and `certification_uids: 1`.
+
+Certifications have the app's own stable id, `certification_uid` in the course document (same characters as a
+course `uid`): a course belongs to its owner's certification with that id, and one sent without it (older apps) to
+the certification of that name. The server keeps one certification per owner and name. When two devices sent the same
+name with different ids, the first one stays, and course summaries say which: `certification_uid`, with
+`certification_name`, the certification's current name (`certification` is the name the course was last sent
+with, until it is sent again after a rename). A rename goes through `PUT /api/v1/certifications/{uid}` before the
+courses are sent again with the new name.
 
 | | |
 |---|---|
 | `PATCH /api/v1/me` | `{name}` (1–100 characters): this token's label, the name other people see |
 | `PATCH /api/v1/courses/{uid}` | also `{link_actions: [..] \| null}` (the owner) |
-| `GET /api/v1/members?course=uid` or `?certification=name` | `{members: [{id, token_id, label, guest, role, …}]}` |
+| `GET /api/v1/members?course=uid` or `?certification=name&certification_uid=id` | `{members: [{id, token_id, label, guest, role, …}]}` |
 | `PATCH /api/v1/memberships/{id}` | `{role}` (the owner) |
 | `DELETE /api/v1/memberships/{id}` | the owner removes a member, or the member leaves |
-| `GET /api/v1/memberships` | what was shared with this token: `{id, role, owner, course: {uid, title} \| certification: {name, share_id}}` |
-| `PUT /api/v1/certifications` | `{name, visibility, link_actions}` → `{name, share_id, url, visibility, courses, link_actions, actions}`; `private`: not shared |
-| `GET /api/v1/certifications` | the owner's shared certifications |
+| `GET /api/v1/memberships` | what was shared with this token: `{id, role, owner, course: {uid, title} \| certification: {uid, name, share_id}}` |
+| `PUT /api/v1/certifications` | `{name, uid, visibility, link_actions}` → `{uid, name, share_id, url, visibility, courses, link_actions, actions}`; `private`: not shared |
+| `PUT /api/v1/certifications/{uid}` | `{name, previous}`: renamed in the app from `previous` (`null`: only tells its id). Answers the certification as it is now: another device's name when it renamed it since, the server's `uid` when another device sent it first, its `previous` name finding one the server has no id for yet. 409 `code: name_taken` when another certification in use (courses, members or a page) has the name; one not in use gives it up |
+| `GET /api/v1/certifications` | the owner's certifications shared, or with members |
 
 `uid` is the app's own stable id for the course (1–100 characters among `A-Z a-z 0-9 . _ : -`), e.g. a UUID
 kept on the course row. The server answers with the public `url`, which never changes while the course is on the
@@ -360,6 +370,7 @@ revision numbers and the last accepted baseline drive conflict detection.
   "format": "flashcert-share-1",
   "title": "Hooks and guardrails",
   "certification": "Claude Agent SDK",
+  "certification_uid": "5f0c2a1e-…",
   "lang": "en",
   "visibility": "public",
   "position": 3,
@@ -393,7 +404,7 @@ revision numbers and the last accepted baseline drive conflict detection.
 * A valid item comes back from `GET /api/v1/courses/{uid}` exactly as it was sent, so the app can compare its copy
   with the server's. Older servers (0.3) filled in empty `sources`, `accept` and `bank` lists and sorted `multi`
   answers; change reviews treat those differences as no edit.
-* `visibility` is `public`, `unlisted` or `private`. `certification`, `lang`, `position` (order inside the
+* `visibility` is `public`, `unlisted` or `private`. `certification`, `certification_uid`, `lang`, `position` (order inside the
   certification), `modified_at` (last edit on the device, milliseconds since the epoch), `sheet`, `questions` and
   `cards` are optional.
 * Unplayable questions and cards are dropped and listed in `warnings` in the response. Transcript, analysis and

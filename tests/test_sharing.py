@@ -172,8 +172,11 @@ def test_shared_certification_page_lists_its_shared_courses(client, engine, cour
     assert b"flashcert://" not in client.get(f"/cert/{cert['share_id']}").data
     client.put("/api/v1/certifications", json={"name": "Claude Agent SDK", "visibility": "private"}, headers=alice)
     assert client.get(f"/cert/{cert['share_id']}").status_code == 404
-    assert [c["name"] for c in client.get("/api/v1/certifications", headers=alice).get_json()["certifications"]] == \
-        ["Claude Agent SDK"]
+    # Not shared and without members, it isn't listed; sharing it again keeps its link.
+    assert client.get("/api/v1/certifications", headers=alice).get_json()["certifications"] == []
+    again = client.put("/api/v1/certifications", json={"name": "Claude Agent SDK", "visibility": "unlisted"},
+                       headers=alice).get_json()
+    assert again["share_id"] == cert["share_id"]
 
 
 def test_public_course_offers_the_owners_link_actions_and_follows_with_etags(client, engine, course):
@@ -379,3 +382,118 @@ def test_upgrade_drops_invitations(tmp_path):
         tables = inspect(conn).get_table_names()
         assert "invite" not in tables and "via" not in {c["name"] for c in inspect(conn).get_columns("membership")}
         assert conn.execute(select(db.meta.c.value)).scalar_one() == str(db.SCHEMA_VERSION)
+
+
+def rename(client, headers, uid, name, previous):
+    return client.put(f"/api/v1/certifications/{uid}", json={"name": name, "previous": previous}, headers=headers)
+
+
+def test_a_renamed_certification_keeps_its_link_and_its_members(client, engine, course):
+    _, alice = owner(engine)
+    sdk = {**course, "certification_uid": "cert-sdk", "visibility": "unlisted"}
+    put(client, alice, sdk)
+    cert = client.put("/api/v1/certifications", json={"name": "Claude Agent SDK", "uid": "cert-sdk",
+                                                      "visibility": "unlisted", **EDIT}, headers=alice).get_json()
+    assert cert["uid"] == "cert-sdk"
+    bob = guest(join(client, {"certification": cert["share_id"]}))
+
+    r = rename(client, alice, "cert-sdk", "Agent SDK", "Claude Agent SDK")
+    assert r.status_code == 200 and r.get_json()["name"] == "Agent SDK" and r.get_json()["share_id"] == cert["share_id"]
+    # Before the course is sent again under the new name, it is still in, and says where it is now.
+    [shared] = client.get("/api/v1/courses", headers=bob).get_json()["courses"]
+    assert shared["certification"] == "Claude Agent SDK" and shared["certification_name"] == "Agent SDK"
+    assert shared["certification_uid"] == "cert-sdk"
+    put(client, alice, {**sdk, "certification": "Agent SDK"})
+    listing = client.get("/api/v1/courses", headers=bob).get_json()
+    assert [c["certification"] for c in listing["courses"]] == ["Agent SDK"] and listing["gone"] == []
+    public = client.get(f"/api/public/certifications/{cert['share_id']}").get_json()
+    assert public["name"] == "Agent SDK" and len(public["courses"]) == 1
+    assert len(client.get("/api/v1/members?certification=Agent SDK&certification_uid=cert-sdk",
+                          headers=alice).get_json()["members"]) == 1
+    # Sent again or told again, nothing changes.
+    assert rename(client, alice, "cert-sdk", "Agent SDK", "Claude Agent SDK").get_json()["name"] == "Agent SDK"
+    # A member's edit keeps the owner's certification.
+    client.put("/api/v1/courses/course-1", json={**sdk, "certification": "Elsewhere", "certification_uid": "x",
+                                                 "notes": "## Edited\n", "expected_revision": 2}, headers=bob)
+    row = client.get("/api/v1/courses/course-1", headers=alice).get_json()
+    assert (row["certification"], row["certification_uid"]) == ("Agent SDK", "cert-sdk")
+
+
+def test_a_certification_shared_before_ids_is_renamed_with_its_courses(client, engine, course):
+    _, alice = owner(engine)
+    put(client, alice, {**course, "visibility": "unlisted"})
+    cert = client.put("/api/v1/certifications", json={"name": "Claude Agent SDK", "visibility": "unlisted", **EDIT},
+                      headers=alice).get_json()
+    assert cert["uid"] is None
+    bob = guest(join(client, {"certification": cert["share_id"]}))
+
+    # Renamed on a device before it told the server its id: the old name finds it.
+    r = rename(client, alice, "cert-sdk", "Agent SDK", "Claude Agent SDK")
+    assert r.get_json()["uid"] == "cert-sdk" and r.get_json()["share_id"] == cert["share_id"]
+    [shared] = client.get("/api/v1/courses", headers=bob).get_json()["courses"]
+    assert shared["certification_uid"] == "cert-sdk" and shared["certification_name"] == "Agent SDK"
+
+
+def test_two_devices_agree_on_one_certification(client, engine, course):
+    _, alice = owner(engine)
+    put(client, alice, {**course, "certification_uid": "from-phone"})
+    # The tablet made the same certification on its own: the server keeps the first id, which the app takes.
+    r = put(client, alice, {**course, "title": "From the tablet", "certification_uid": "from-tablet"}, uid="course-2")
+    assert r.get_json()["certification_uid"] == "from-phone"
+    # Renamed on the tablet before it learned that id: the server renames the one it has, and says its id.
+    r = rename(client, alice, "from-tablet", "Claude SDK", "Claude Agent SDK")
+    assert (r.get_json()["uid"], r.get_json()["name"]) == ("from-phone", "Claude SDK")
+    assert client.get("/api/v1/courses/course-2", headers=alice).get_json()["certification_name"] == "Claude SDK"
+    # A course from an older app, without an id, takes the one of its certification's name.
+    put(client, alice, {**course, "certification": "Claude SDK"}, uid="old")
+    assert client.get("/api/v1/courses/old", headers=alice).get_json()["certification_uid"] == "from-phone"
+    # Sent again unchanged, now with an id, it takes it without a new revision.
+    fresh = {**course, "certification": "Fresh"}
+    put(client, alice, fresh, uid="fresh")
+    assert client.get("/api/v1/courses/fresh", headers=alice).get_json()["certification_uid"] is None
+    r = put(client, alice, {**fresh, "certification_uid": "cert-fresh"}, uid="fresh").get_json()
+    assert (r["certification_uid"], r["revision"], r["changed"]) == ("cert-fresh", 1, False)
+
+
+def test_a_stale_rename_leaves_the_newer_name(client, engine, course):
+    _, alice = owner(engine)
+    put(client, alice, {**course, "certification_uid": "cert-sdk"})
+    rename(client, alice, "cert-sdk", "Agent SDK", "Claude Agent SDK")
+    # Another device still calls it by the first name and renames it from there.
+    r = rename(client, alice, "cert-sdk", "SDK", "Claude Agent SDK")
+    assert r.status_code == 200 and r.get_json()["name"] == "Agent SDK"
+    assert rename(client, alice, "cert-sdk", "Claude", None).get_json()["name"] == "Agent SDK"
+
+
+def test_a_name_in_use_is_refused(client, engine, course):
+    _, alice = owner(engine)
+    put(client, alice, {**course, "certification_uid": "cert-sdk"})
+    put(client, alice, {**course, "certification": "Other", "certification_uid": "cert-other"}, uid="other")
+    r = rename(client, alice, "cert-sdk", "Other", "Claude Agent SDK")
+    assert r.status_code == 409 and r.get_json()["code"] == "name_taken"
+    assert client.get("/api/v1/courses/course-1", headers=alice).get_json()["certification_name"] == "Claude Agent SDK"
+
+    # Once nothing uses it, the name is free.
+    put(client, alice, {**course, "certification": None, "certification_uid": None}, uid="other")
+    assert rename(client, alice, "cert-sdk", "Other", "Claude Agent SDK").get_json()["name"] == "Other"
+
+    for bad in ({"name": ""}, {"name": "x" * 201}, {"name": "A", "previous": 3}):
+        assert client.put("/api/v1/certifications/cert-sdk", json=bad, headers=alice).status_code == 400
+    assert client.put("/api/v1/certifications/bad uid", json={"name": "A"}, headers=alice).status_code == 400
+    sid = editable(client, alice, course, uid="mine")
+    bob = guest(join(client, {"course": sid}))
+    assert rename(client, bob, "cert-sdk", "Mine", None).status_code == 403
+
+
+def test_upgrade_adds_certification_ids(tmp_path):
+    engine = db.make_engine(f"sqlite:///{tmp_path / 'v5.db'}")
+    db.init(engine)
+    with engine.begin() as conn:
+        conn.execute(text("DROP INDEX collection_owner_uid"))
+        conn.execute(text("ALTER TABLE collection DROP COLUMN uid"))
+        conn.execute(text("ALTER TABLE course DROP COLUMN certification_uid"))
+        conn.execute(db.meta.update().values(value="5"))
+    db.init(engine)
+    with engine.connect() as conn:
+        assert "certification_uid" in {c["name"] for c in inspect(conn).get_columns("course")}
+        assert "collection_owner_uid" in {i["name"] for i in inspect(conn).get_indexes("collection")}

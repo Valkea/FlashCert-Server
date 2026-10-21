@@ -18,6 +18,7 @@ from sqlalchemy import (
     Table,
     Text,
     UniqueConstraint,
+    and_,
     create_engine,
     event,
     func,
@@ -28,7 +29,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.engine import Engine
 
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
 
 metadata = MetaData()
 
@@ -65,6 +66,9 @@ course = Table(
     Column("share_id", String(16), nullable=False, unique=True),
     Column("title", String(300), nullable=False),
     Column("certification", String(200)),
+    #: The app's own identifier for that certification, which stays when it is renamed. None from older apps: the
+    #: course then belongs to the certification of that name.
+    Column("certification_uid", String(100)),
     Column("lang", String(16)),
     #: Order inside its certification (the app's own course order); title order when missing.
     Column("position", BigInteger),
@@ -115,13 +119,16 @@ course_revision = Table(
     Column("token_id", Integer),
 )
 
-#: A certification shared as a whole: every course of its owner with that certification name, now and later.
+#: A certification of an owner, shareable as a whole: every course of its owner in it, now and later. Courses belong
+#: to it by its uid, which the app keeps across renames; those sent without one, by its name.
 collection = Table(
     "collection",
     metadata,
     Column("id", Integer, primary_key=True, autoincrement=True),
     Column("owner_id", Integer, nullable=False),
     Column("name", String(200), nullable=False),
+    #: The app's identifier for the certification. None for one shared before apps sent it, until one does.
+    Column("uid", String(100)),
     Column("share_id", String(16), nullable=False, unique=True),
     #: "private": not shared, no page. "unlisted" or "public": a page listing its shared courses.
     Column("visibility", String(10), nullable=False, default="private"),
@@ -176,6 +183,7 @@ Index("report_course_status", report.c.course_id, report.c.status)
 Index("membership_token", membership.c.token_id)
 Index("course_visibility", course.c.visibility, course.c.updated_at)
 course_owner = Index("course_owner", course.c.owner_id)
+collection_uid = Index("collection_owner_uid", collection.c.owner_id, collection.c.uid, unique=True)
 
 
 def now_ms() -> int:
@@ -209,6 +217,8 @@ def init(engine: Engine) -> None:
         version = int(row.value)
         if version < 4:
             _to_v4(conn)  # first: the older steps read whole rows, new columns included
+        if version < 6:
+            _to_v6(conn)  # first too
         if version < 2:
             _to_v2(conn)
         if version < 3:
@@ -250,6 +260,12 @@ def _to_v5(conn) -> None:
     conn.execute(text("DROP TABLE IF EXISTS invite"))
     if "via" in {c["name"] for c in inspect(conn).get_columns("membership")}:
         conn.execute(text("ALTER TABLE membership DROP COLUMN via"))
+
+
+def _to_v6(conn) -> None:
+    """Certifications keep the app's id for them, so a renamed one keeps its link and the people it is shared with."""
+    _add_columns(conn, {"course": {"certification_uid": "VARCHAR(100)"}, "collection": {"uid": "VARCHAR(100)"}})
+    collection_uid.create(conn, checkfirst=True)
 
 
 def _add_columns(conn, tables: dict[str, dict[str, str]]) -> None:
@@ -424,6 +440,10 @@ def save_course(engine: Engine, uid: str, values: dict, owner_id: int | None, *,
             update["owner_id"] = owner_id
         if update:
             _update(conn, existing, update, "updated" if changed else "visibility", device, author)
+        uid_now = values.get("certification_uid")
+        if not changed and uid_now is not None and uid_now != existing.certification_uid:
+            # Which certification it is in, by id: visitors don't see it, so no new revision.
+            conn.execute(course.update().where(course.c.id == existing.id).values(certification_uid=uid_now))
         return False, changed
 
 
@@ -466,6 +486,8 @@ def restore_course(engine: Engine, uid: str, owner_id: int, revision: int, expec
         saved = json.loads(snapshot)
         values = {k: saved[k] for k in ("title", "certification", "lang", "position", "visibility", "content",
                                       "content_hash", "question_count", "card_count")}
+        # Revisions from before certification ids stay in the certification the course is in now.
+        values["certification_uid"] = saved.get("certification_uid", row.certification_uid)
         values.update(deleted_at=None, updated_at=now_ms(), modified_at=now_ms())
         if visibility is not None:
             values["visibility"] = visibility
@@ -503,10 +525,13 @@ def give_courses(engine: Engine, token_id: int, uids: list[str] | None = None, f
         done = conn.execute(course.update().where(or_(*conditions)).values(owner_id=token_id)).rowcount
         if from_id is not None:
             conn.execute(course_gone.update().where(course_gone.c.owner_id == from_id).values(owner_id=token_id))
-            taken = set(conn.execute(select(collection.c.name).where(collection.c.owner_id == token_id)).scalars())
+            mine = conn.execute(select(collection.c.name, collection.c.uid).where(collection.c.owner_id == token_id)).all()
+            taken, uids = {r.name for r in mine}, {r.uid for r in mine if r.uid is not None}
             moved = collection.update().where(collection.c.owner_id == from_id)
             if taken:
                 moved = moved.where(collection.c.name.not_in(taken))
+            if uids:
+                moved = moved.where(or_(collection.c.uid.is_(None), collection.c.uid.not_in(uids)))
             conn.execute(moved.values(owner_id=token_id))
         return done
 
@@ -535,7 +560,7 @@ def shared_with(conn, token_id: int) -> dict[int, str]:
             col = conn.execute(select(collection).where(collection.c.id == m.collection_id)).first()
             if col is None or col.visibility == "private":
                 continue
-            query = query.where(course.c.owner_id == col.owner_id, course.c.certification == col.name)
+            query = query.where(in_certification(col))
         query = query.where(course.c.visibility != "private")
         for course_id in conn.execute(query).scalars():
             if rank(m.role) > rank(roles.get(course_id)):
@@ -609,23 +634,94 @@ def membership_owner(conn, membership_id: int):
 # --- Certifications shared as a whole ------------------------------------------------------------
 
 
-def collection_for(conn, owner_id: int, name: str, create: bool = False):
-    row = conn.execute(select(collection).where(collection.c.owner_id == owner_id, collection.c.name == name)).first()
-    if row is None and create:
+class NameTaken(Exception):
+    """Another certification of the owner, still in use, has that name."""
+
+
+def in_certification(col):
+    """The condition for the owner's courses in the certification ``col``: by its uid, and by its name for courses
+    sent without one."""
+    by_name = and_(course.c.certification_uid.is_(None), course.c.certification == col.name)
+    if col.uid is not None:
+        by_name = or_(course.c.certification_uid == col.uid, by_name)
+    return and_(course.c.owner_id == col.owner_id, by_name)
+
+
+def _collection(conn, owner_id: int, **where):
+    stmt = select(collection).where(collection.c.owner_id == owner_id)
+    for key, value in where.items():
+        stmt = stmt.where(collection.c[key] == value)
+    return conn.execute(stmt).first()
+
+
+def _claim(conn, row, uid: str):
+    """A certification from before uids takes the app's: its courses sent without one keep belonging to it."""
+    conn.execute(collection.update().where(collection.c.id == row.id).values(uid=uid))
+    conn.execute(course.update().where(course.c.owner_id == row.owner_id, course.c.certification_uid.is_(None),
+                                       course.c.certification == row.name).values(certification_uid=uid))
+    return _collection(conn, row.owner_id, id=row.id)
+
+
+def certification_for(conn, owner_id: int, uid: str | None, name: str, create: bool = False):
+    """The owner's certification the app knows as ``uid`` and calls ``name``, or None.
+
+    Found by its uid, else by its name: one from before uids then takes this one, and one another device sent first
+    keeps its own (the app learns it from its courses). With ``create``, a missing one is made, not shared.
+    """
+    if uid:
+        row = _collection(conn, owner_id, uid=uid)
+        if row is not None:
+            return row
+    row = _collection(conn, owner_id, name=name)
+    if row is not None:
+        return _claim(conn, row, uid) if create and uid and row.uid is None else row
+    if not create:
+        return None
+    share_id = new_share_id()
+    while conn.execute(select(collection.c.id).where(collection.c.share_id == share_id)).first() or \
+            conn.execute(select(course.c.id).where(course.c.share_id == share_id)).first():
         share_id = new_share_id()
-        while conn.execute(select(collection.c.id).where(collection.c.share_id == share_id)).first() or \
-                conn.execute(select(course.c.id).where(course.c.share_id == share_id)).first():
-            share_id = new_share_id()
-        conn.execute(collection.insert().values(owner_id=owner_id, name=name[:200], share_id=share_id,
-                                                visibility="private", created_at=now_ms()))
-        row = conn.execute(select(collection).where(collection.c.owner_id == owner_id, collection.c.name == name)).first()
-    return row
+    conn.execute(collection.insert().values(owner_id=owner_id, name=name[:200], uid=uid or None, share_id=share_id,
+                                            visibility="private", created_at=now_ms()))
+    return _collection(conn, owner_id, share_id=share_id)
+
+
+def rename_certification(conn, owner_id: int, uid: str, name: str, previous: str | None):
+    """The app renamed certification ``uid`` from ``previous`` to ``name``; returns it as it is now.
+
+    Its link, its members and its courses stay. Only a rename of the name the server has is applied: when another
+    device renamed it since, that name stays and the app takes it. A certification not in use (no course, member or
+    page) that already has the name gives it up; one in use raises NameTaken.
+    """
+    row = _collection(conn, owner_id, uid=uid)
+    if row is None and previous:
+        # Renamed on this device before its id reached the server.
+        row = _collection(conn, owner_id, name=previous)
+        if row is not None and row.uid is None:
+            row = _claim(conn, row, uid)
+    if row is None:
+        return certification_for(conn, owner_id, uid, name, create=True)
+    if row.name == name or previous is None or row.name != previous:
+        return row
+    other = _collection(conn, owner_id, name=name)
+    if other is not None:
+        used = (other.visibility != "private"
+                or conn.execute(select(membership.c.id).where(membership.c.collection_id == other.id)).first()
+                or collection_courses(conn, other, include_private=True))
+        if used:
+            raise NameTaken(name)
+        conn.execute(collection.delete().where(collection.c.id == other.id))
+    if row.uid is not None:
+        # Courses sent by older apps under the old name.
+        conn.execute(course.update().where(course.c.owner_id == owner_id, course.c.certification_uid.is_(None),
+                                           course.c.certification == row.name).values(certification_uid=row.uid))
+    conn.execute(collection.update().where(collection.c.id == row.id).values(name=name[:200]))
+    return _collection(conn, owner_id, id=row.id)
 
 
 def collection_courses(conn, col, include_private: bool) -> list:
     """The certification's live courses, in the owner's order."""
-    query = select(course).where(course.c.owner_id == col.owner_id, course.c.certification == col.name,
-                                 course.c.deleted_at.is_(None))
+    query = select(course).where(in_certification(col), course.c.deleted_at.is_(None))
     if not include_private:
         query = query.where(course.c.visibility != "private")
     rows = conn.execute(query).all()

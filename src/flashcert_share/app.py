@@ -27,6 +27,8 @@ REPORT_KINDS = ("question", "card", "section", "sheet", "course")
 REPORT_STATUSES = ("open", "resolved", "dismissed")
 GONE_REASONS = ("removed", "deleted")
 MEMBER_ROLES = ("viewer", "editor")
+#: What the owner decides for a course; members editing it send their content only.
+OWNER_FIELDS = ("certification", "certification_uid", "position", "visibility")
 #: Sync API versions: 1 recoverable sync of a token's own courses, 2 also the courses shared with it.
 SYNC_VERSIONS = ("1", "2")
 UI_LANGS = ("en", "fr")
@@ -231,10 +233,21 @@ def create_app(config: Config | None = None, engine: Engine | None = None) -> Fl
     def collection_summary(row) -> dict:
         with engine.connect() as conn:
             courses = db.collection_courses(conn, row, include_private=True)
-        return {"name": row.name, "share_id": row.share_id, "url": certification_url(row.share_id),
+        return {"uid": row.uid, "name": row.name, "share_id": row.share_id, "url": certification_url(row.share_id),
                 "visibility": row.visibility, "courses": [c.uid for c in courses],
                 "link_actions": None if row.link_actions is None else link_actions(row.link_actions),
                 "actions": actions(row.link_actions, row.visibility)}
+
+    def certification_name(row) -> str | None:
+        """The current name of the course's certification: a course keeps the one it was sent with until it is sent
+        again, after the certification was renamed."""
+        uid = getattr(row, "certification_uid", None)
+        if uid is None or row.owner_id is None:
+            return row.certification
+        with engine.connect() as conn:
+            name = conn.execute(select(db.collection.c.name).where(db.collection.c.owner_id == row.owner_id,
+                                                                   db.collection.c.uid == uid)).scalar_one_or_none()
+        return row.certification if name is None else name
 
     def course_summary(row, open_reports: int | None = None, role: str = "owner", owner: str | None = None) -> dict:
         out = {
@@ -243,6 +256,8 @@ def create_app(config: Config | None = None, engine: Engine | None = None) -> Fl
             "url": share_url(row.share_id),
             "title": row.title,
             "certification": row.certification,
+            "certification_uid": getattr(row, "certification_uid", None),
+            "certification_name": certification_name(row),
             "lang": row.lang,
             "position": row.position,
             "visibility": row.visibility,
@@ -530,7 +545,8 @@ def create_app(config: Config | None = None, engine: Engine | None = None) -> Fl
         reports = sum(open_reports_by_course().values())
         return {"ok": True, "version": __version__, "courses": courses, "open_reports": reports,
                 "base_url": base_url(), "site_name": cfg.site_name, "token": label, "token_id": g.token_id,
-                "kind": g.token_kind, "safe_sync": 1, "sync_version": 2, "link_actions": list(cfg.link_actions),
+                "kind": g.token_kind, "safe_sync": 1, "sync_version": 2, "certification_uids": 1,
+                "link_actions": list(cfg.link_actions),
                 "history_limit": cfg.history_limit, "trash_days": cfg.trash_days,
                 "notes_change_percent": cfg.notes_change_percent, "items_change_percent": cfg.items_change_percent}
 
@@ -593,7 +609,13 @@ def create_app(config: Config | None = None, engine: Engine | None = None) -> Fl
                 return api_error(403, "this course is shared with you to read only", code="read_only")
             # The owner decides where the course is listed and who sees it; members send their content.
             owner_id = existing.owner_id
-            meta.update({k: existing._mapping[k] for k in ("certification", "position", "visibility")})
+            meta.update({k: existing._mapping[k] for k in OWNER_FIELDS})
+        elif meta["certification"] is not None:
+            # The certification the server knows by this id, or by this name (older apps, or another device's id).
+            with engine.begin() as conn:
+                col = db.certification_for(conn, owner_id, meta["certification_uid"], meta["certification"],
+                                           create=meta["certification_uid"] is not None)
+            meta["certification_uid"] = col.uid if col is not None else None
         now = db.now_ms()
         values = {
             **meta,
@@ -643,7 +665,7 @@ def create_app(config: Config | None = None, engine: Engine | None = None) -> Fl
         except payload.PayloadError as e:
             return api_error(422, str(e))
         if role != "owner":
-            meta.update({k: row._mapping[k] for k in ("certification", "position", "visibility")})
+            meta.update({k: row._mapping[k] for k in OWNER_FIELDS})
         impact = changes.summarize(json.loads(row.content), content, cfg.notes_change_percent, cfg.items_change_percent)
         return {"revision": row.revision, "changes": impact, "confirmation": payload.confirmation_hash(meta, content),
                 "warnings": warnings}
@@ -732,8 +754,9 @@ def create_app(config: Config | None = None, engine: Engine | None = None) -> Fl
             with engine.begin() as conn:
                 conn.execute(db.course.update().where(db.course.c.id == row.id).values(link_actions=chosen))
         if "visibility" in body:
-            values = {k: row._mapping[k] for k in ("title", "certification", "lang", "position", "content",
-                                                  "content_hash", "modified_at", "question_count", "card_count")}
+            values = {k: row._mapping[k] for k in ("title", "certification", "certification_uid", "lang", "position",
+                                                  "content", "content_hash", "modified_at", "question_count",
+                                                  "card_count")}
             values["visibility"] = visibility
             db.save_course(engine, uid, values, g.token_id, expected=expected(body), device=device())
         return course_summary(course_row(uid=uid))
@@ -753,9 +776,17 @@ def create_app(config: Config | None = None, engine: Engine | None = None) -> Fl
 
     # --- sharing with other people (owner side, and the member's own memberships) -------------------
 
+    def certification_uid(value) -> str | None:
+        """The app's id for a certification, from a body or a query, or abort."""
+        if value in (None, ""):
+            return None
+        if not isinstance(value, str) or not UID.match(value):
+            abort(api_error(400, "a certification uid must be 1-100 characters among A-Z a-z 0-9 . _ : -"))
+        return value
+
     def target_from(source: dict):
-        """(course row, collection row) named by {course: uid} or {certification: name}, owned by this token.
-        A certification is shared as a whole from its name; its collection is made the first time."""
+        """(course row, collection row) named by {course: uid} or {certification: name, uid}, owned by this token.
+        A certification is shared as a whole by its uid (else its name); it is made the first time."""
         if isinstance(source.get("course"), str):
             row = my_course(source["course"])
             if row is None:
@@ -764,7 +795,8 @@ def create_app(config: Config | None = None, engine: Engine | None = None) -> Fl
         name = source.get("certification")
         if isinstance(name, str) and 0 < len(name.strip()) <= 200:
             with engine.begin() as conn:
-                return None, db.collection_for(conn, g.token_id, name.strip(), create=True)
+                return None, db.certification_for(conn, g.token_id, certification_uid(source.get("uid")), name.strip(),
+                                                  create=True)
         abort(api_error(400, "name a course (uid) or a certification (name)"))
 
     def membership_out(m, conn) -> dict:
@@ -775,7 +807,7 @@ def create_app(config: Config | None = None, engine: Engine | None = None) -> Fl
             owner = row.owner_id
         else:
             col = conn.execute(select(db.collection).where(db.collection.c.id == m.collection_id)).first()
-            out["certification"] = {"name": col.name, "share_id": col.share_id}
+            out["certification"] = {"uid": col.uid, "name": col.name, "share_id": col.share_id}
             owner = col.owner_id
         out["owner"] = conn.execute(select(db.token.c.label).where(db.token.c.id == owner)).scalar_one_or_none() or ""
         return out
@@ -792,14 +824,16 @@ def create_app(config: Config | None = None, engine: Engine | None = None) -> Fl
     @app.get("/api/v1/members")
     @require_token
     def api_members():
-        """Who the owner shared a course (?course=uid) or a certification (?certification=name) with."""
+        """Who the owner shared a course (?course=uid) or a certification (?certification=name, and its
+        &certification_uid) with."""
         if request.args.get("course"):
             row = my_course(request.args["course"])
             if row is None:
                 return api_error(404, "no such course")
             return {"members": db.members(engine, g.token_id, course_id=row.id)}
         with engine.connect() as conn:
-            col = db.collection_for(conn, g.token_id, request.args.get("certification", "").strip())
+            col = db.certification_for(conn, g.token_id, certification_uid(request.args.get("certification_uid")),
+                                       request.args.get("certification", "").strip())
         return {"members": db.members(engine, g.token_id, collection_id=col.id) if col is not None else []}
 
     @app.patch("/api/v1/memberships/<int:membership_id>")
@@ -829,16 +863,42 @@ def create_app(config: Config | None = None, engine: Engine | None = None) -> Fl
     @app.get("/api/v1/certifications")
     @require_token
     def api_certifications():
-        """The owner's certifications shared as a whole (or that have members)."""
+        """The owner's certifications shared as a whole, or that have members."""
         with engine.connect() as conn:
+            joined = select(db.membership.c.collection_id).where(db.membership.c.collection_id.is_not(None))
             rows = conn.execute(select(db.collection).where(db.collection.c.owner_id == g.token_id)
+                                .where((db.collection.c.visibility != "private") | db.collection.c.id.in_(joined))
                                 .order_by(db.collection.c.name)).all()
         return {"certifications": [collection_summary(r) for r in rows]}
+
+    @app.put("/api/v1/certifications/<uid>")
+    @require_token
+    def api_name_certification(uid: str):
+        """{name, previous}: the app renamed the certification ``uid`` from ``previous`` (null: it only tells the
+        server its id). Its link and the people it is shared with stay. The answer is the certification as it is now:
+        its name is another device's when that one renamed it since, its uid the server's when another device sent
+        it first."""
+        uid = certification_uid(uid)
+        body = json_body()
+        name, previous = body.get("name"), body.get("previous")
+        if not isinstance(name, str) or not 0 < len(name.strip()) <= 200:
+            return api_error(400, "name must be 1 to 200 characters")
+        if previous is not None and not isinstance(previous, str):
+            return api_error(400, "previous must be a string or null")
+        if g.token_kind == "guest":
+            return api_error(403, "a guest token only works on the courses shared with it", code="guest")
+        try:
+            with engine.begin() as conn:
+                col = db.rename_certification(conn, g.token_id, uid, name.strip(),
+                                              previous.strip() if previous else None)
+        except db.NameTaken:
+            return api_error(409, "another certification has this name", code="name_taken", name=name.strip())
+        return collection_summary(col)
 
     @app.put("/api/v1/certifications")
     @require_token
     def api_share_certification():
-        """{name, visibility, link_actions}: a page for the certification (its courses that aren't private), or
+        """{name, uid, visibility, link_actions}: a page for the certification (its courses that aren't private), or
         "private" for none. The link stays the same."""
         body = json_body()
         visibility = body.get("visibility", "unlisted")
@@ -846,7 +906,7 @@ def create_app(config: Config | None = None, engine: Engine | None = None) -> Fl
             return api_error(400, "visibility must be public, unlisted or private")
         if g.token_kind == "guest":
             return api_error(403, "a guest token only works on the courses shared with it", code="guest")
-        _, col = target_from({"certification": body.get("name")})
+        _, col = target_from({"certification": body.get("name"), "uid": body.get("uid")})
         values = {"visibility": visibility}
         if "link_actions" in body:
             values["link_actions"] = stored_actions(body["link_actions"])

@@ -6,6 +6,7 @@ Format "flashcert-share-1" (what the app sends)::
       "format": "flashcert-share-1",
       "title": "Hooks and guardrails",
       "certification": "Claude Agent SDK",      # optional
+      "certification_uid": "5f0c…",             # optional, the app's id for it, kept when it is renamed
       "lang": "en",                             # optional, language of the notes
       "visibility": "public",                   # or "unlisted" (link only) or "private" (backup, no page)
       "position": 3,                            # optional, order inside the certification
@@ -243,9 +244,12 @@ def normalize(doc) -> tuple[dict, dict, list[str]]:
         raise PayloadError("visibility must be public, unlisted or private")
     lang = doc.get("lang") if fmt == "flashcert-share-1" else doc.get("out_lang")
     modified = doc.get("modified_at")
+    certification = _text(doc.get("certification"), 200, "certification") or None
     meta = {
         "title": _text(doc.get("title"), 300, "title", required=True),
-        "certification": _text(doc.get("certification"), 200, "certification") or None,
+        "certification": certification,
+        "certification_uid": (_text(doc.get("certification_uid"), 100, "certification_uid") or None)
+        if certification else None,
         "lang": _text(lang, 16, "lang") or None,
         "visibility": visibility,
         "position": doc["position"] if type(doc.get("position")) is int else None,
