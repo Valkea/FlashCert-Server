@@ -17,7 +17,11 @@
   <header class="course-head">
     <a class="back" href="{{ url_for('index') }}"><svg class="icon"><use href="#i-back"/></svg>{{ t.back }}</a>
     {% if course.certification %}
+    {% if cert_link %}
+    <p class="cert-chip"><a href="{{ cert_link }}" id="cert-link"><svg class="icon" aria-hidden="true"><use href="#i-cap"/></svg>{{ course.certification }}</a></p>
+    {% else %}
     <p class="cert-chip"><svg class="icon" aria-hidden="true"><use href="#i-cap"/></svg>{{ course.certification }}</p>
+    {% endif %}
     {% endif %}
     <h1>{{ title }}</h1>
     <div class="course-bar">
@@ -31,6 +35,7 @@
         <button type="button" class="btn ghost small flag-course" data-kind="course" data-id=""><svg class="icon"><use href="#i-flag"/></svg><span data-t="report_short"></span></button>
       </span>
     </div>
+    <div class="mastery" id="mastery" hidden></div>
   </header>
 
   <nav class="tabs" role="tablist" aria-label="{{ title }}">

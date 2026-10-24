@@ -191,3 +191,21 @@ def test_a_course_without_notions_keeps_its_hash(client, auth, course):
     assert "notions" not in client.get("/api/v1/courses/course-1", headers=auth).get_json()["content"]
     assert not put(client, auth, course).get_json()["changed"]
     assert put(client, auth, {**course, "notions": []}).get_json()["hash"] != first["hash"]
+
+
+def test_review_targets_reach_the_pages(client, auth, course):
+    first = put(client, auth, course).get_json()
+    assert "review_targets" not in client.get("/api/v1/courses/course-1", headers=auth).get_json()["content"]
+    body = put(client, auth, {**course, "review_targets": {"questions": 5, "cards": 0}}).get_json()
+    assert body["changed"] and body["hash"] != first["hash"]
+    data = client.get(f"/api/public/courses/{first['share_id']}").get_json()
+    assert data["review_targets"] == {"questions": 5, "cards": 0}
+
+
+def test_invalid_review_targets_are_dropped(client, auth, course):
+    for targets in ({"questions": 0, "cards": 3}, {"questions": 3, "cards": -1}, {"questions": 3},
+                    {"questions": True, "cards": 3}, {"questions": 3, "cards": 101}):
+        body = put(client, auth, {**course, "review_targets": targets}).get_json()
+        assert len(body["warnings"]) == 1, targets
+        assert "review_targets" not in client.get("/api/v1/courses/course-1", headers=auth).get_json()["content"]
+    assert put(client, auth, {**course, "review_targets": [3, 3]}).status_code == 422

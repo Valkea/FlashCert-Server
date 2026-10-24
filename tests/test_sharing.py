@@ -497,3 +497,17 @@ def test_upgrade_adds_certification_ids(tmp_path):
     with engine.connect() as conn:
         assert "certification_uid" in {c["name"] for c in inspect(conn).get_columns("course")}
         assert "collection_owner_uid" in {i["name"] for i in inspect(conn).get_indexes("collection")}
+
+
+def test_course_page_links_its_shared_certification(client, engine, course):
+    _, alice = owner(engine)
+    sid = put(client, alice, {**course, "certification_uid": "cert-1"}).get_json()["share_id"]
+    assert b'id="cert-link"' not in client.get(f"/c/{sid}").data
+    cert = client.put("/api/v1/certifications", json={"name": "Claude Agent SDK", "uid": "cert-1",
+                                                      "visibility": "unlisted"}, headers=alice).get_json()
+    page = client.get(f"/c/{sid}").data
+    assert f'href="/cert/{cert["share_id"]}" id="cert-link"'.encode() in page
+    assert f'data-cert="{cert["share_id"]}"'.encode() in client.get(f"/cert/{cert['share_id']}").data
+    client.put("/api/v1/certifications", json={"name": "Claude Agent SDK", "uid": "cert-1", "visibility": "private"},
+               headers=alice)
+    assert b'id="cert-link"' not in client.get(f"/c/{sid}").data

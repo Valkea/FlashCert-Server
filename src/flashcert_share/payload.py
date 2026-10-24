@@ -15,13 +15,16 @@ Format "flashcert-share-1" (what the app sends)::
       "sheet": {...},                           # optional revision sheet
       "questions": [{"id": "q12", "type": "mcq", "q": "...", ...}],
       "cards": [{"id": "c7", "front": "...", "back": "...", "sources": [...]}],
-      "notions": [{"chapter": "Section", "quote": "...", "importance": 3}]   # optional
+      "notions": [{"chapter": "Section", "quote": "...", "importance": 3}],  # optional
+      "review_targets": {"questions": 3, "cards": 3}                       # optional
     }
 
 Questions and cards may carry "objective_ids": the app's coverage checklist notions they test. The server keeps
 them for the app and leaves them out of the pages. With a checklist, they also carry "importance": the highest
 level of the notions they test, 3 essential, 2 important, 1 detail, 0 none. "notions" lists the checklist's
 notions by "##" chapter heading, with a quote of the notes, so the pages can dim the lines of other levels.
+"review_targets" are the successes in a row the course's certification asks of each question (1 or more) and card
+(0 leaves cards out of mastery), so visitors master the course as its author's app counts it.
 A valid item comes back exactly as it was sent, so the app can compare its copy with the server's.
 
 "flashcert-course-1" bundles (full course exports) are accepted too (transcript, analysis and costs are dropped).
@@ -43,6 +46,7 @@ MAX_SOURCES = 3
 MAX_OBJECTIVE_IDS = 50
 MAX_NOTIONS = 5000
 IMPORTANCE_LEVELS = (0, 1, 2, 3)
+MAX_REVIEW_TARGET = 100
 
 _QUESTION_KEYS = {
     "mcq": ("answers", "correct"),
@@ -217,6 +221,19 @@ def _notions(raw, warnings: list[str]) -> list[dict] | None:
     return out
 
 
+def _review_targets(raw, warnings: list[str]) -> dict | None:
+    if raw is None:
+        return None
+    if not isinstance(raw, dict):
+        raise PayloadError("review_targets must be an object")
+    questions, cards = raw.get("questions"), raw.get("cards")
+    if type(questions) is not int or not 1 <= questions <= MAX_REVIEW_TARGET \
+            or type(cards) is not int or not 0 <= cards <= MAX_REVIEW_TARGET:
+        warnings.append(f"review_targets skipped: questions 1 to {MAX_REVIEW_TARGET}, cards 0 to {MAX_REVIEW_TARGET}")
+        return None
+    return {"questions": questions, "cards": cards}
+
+
 def _sheet(sheet) -> dict | None:
     if sheet is None:
         return None
@@ -292,6 +309,9 @@ def normalize(doc) -> tuple[dict, dict, list[str]]:
     notions = _notions(doc.get("notions"), warnings)
     if notions is not None:
         content["notions"] = notions
+    targets = _review_targets(doc.get("review_targets"), warnings)
+    if targets is not None:
+        content["review_targets"] = targets
     return meta, content, warnings
 
 

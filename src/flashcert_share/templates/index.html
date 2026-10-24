@@ -28,7 +28,7 @@
   <ul class="course-list">
     {% for c in group.courses %}
     <li class="course-item" data-search="{{ (c.title ~ ' ' ~ (group.name or '') ~ ' ' ~ authors.get(c.owner_id, ''))|lower }}">
-      <a href="{{ url_for('course_page', share_id=c.share_id) }}" data-share-id="{{ c.share_id }}" data-cards="{{ c.card_count }}">
+      <a href="{{ url_for('course_page', share_id=c.share_id) }}" data-share-id="{{ c.share_id }}" data-questions="{{ c.question_count }}" data-cards="{{ c.card_count }}">
         <span class="course-title">{{ c.title }}</span>
         <span class="course-meta">
           {% if c.lang %}<span class="chip">{{ c.lang|upper }}</span>{% endif %}

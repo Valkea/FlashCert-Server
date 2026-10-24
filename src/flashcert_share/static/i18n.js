@@ -49,7 +49,7 @@
       report_this: "Report an error in this item", send: "Send", cancel: "Cancel",
       // Progress storage
       progress_title: "Save your progress on this device?",
-      progress_why: "Quiz scores and flashcards you know can be kept in this browser, so you can pick up where you left off.",
+      progress_why: "Quiz scores, flashcards and your successes in a row can be kept in this browser, so you can pick up where you left off. Mastering a question takes several study days, so it needs saving.",
       progress_fact_local: "It stays on this device, in this browser. There is no account.",
       progress_fact_nothing_sent: "Nothing about your answers is sent to the server.",
       progress_fact_persist: "We also ask your browser for “persistent storage”: without it, the browser may erase the data on its own when the device runs low on space. Some browsers ask you to confirm.",
@@ -60,9 +60,22 @@
       progress_blocked: "This browser blocks storage for this site (private window or strict settings), so progress can't be saved.",
       progress_forgotten: "Your progress has been erased from this device.",
       progress_used: "{0} used.",
-      progress_banner: "Your answers aren't saved yet.", progress_banner_more: "Save on this device",
+      progress_banner: "Your answers aren't saved yet: successes in a row won't carry over to another day.", progress_banner_more: "Save on this device",
       progress_saved: "Progress saved on this device",
-      progress_quiz: "Best quiz {0} %", progress_cards: "{0}/{1} cards known"
+      progress_quiz: "Best quiz {0} %", progress_cards: "{0}/{1} cards known",
+      progress_mastered: "{0}/{1} mastered", progress_course_mastered: "Course mastered ✓",
+      // Successes in a row, as in the app
+      study_coverage: "Successes in a row: {0} / {1}", study_item_target: "Successes in a row for this item: {0} / {1}",
+      study_item_today: "Already counted today: the next success in a row counts tomorrow.",
+      study_items_mastered: "{0} of {1} items mastered", streak: "{0}-day streak",
+      study_help: "Each question and card needs {0} correct answers in a row to be mastered (cards: {1}), one per study day; a mistake starts the count again.",
+      item_mastered: "Mastered ✓", course_mastered: "Course mastered",
+      course_mastered_description: "Course mastered. Every item reached its target.",
+      cert_complete: "Every course mastered", cert_open: "See the certification",
+      cert_stat_courses: "Courses mastered", cert_stat_items: "Items mastered", cert_stat_days: "Days studied",
+      cert_stat_streak: "Day streak",
+      celebrations_toggle: "Show celebrations",
+      celebrations_help: "A short celebration when a question, card, course or every course of a certification is mastered."
     },
     fr: {
       tab_notes: "Notes", tab_sheet: "Révision", tab_quiz: "Quiz", tab_cards: "Cartes",
@@ -105,7 +118,7 @@
       report_sent: "Merci ! L'auteur verra votre signalement.", report_failed: "Envoi impossible : {0}",
       report_this: "Signaler une erreur sur cet élément", send: "Envoyer", cancel: "Annuler",
       progress_title: "Enregistrer votre progression sur cet appareil ?",
-      progress_why: "Vos scores aux quiz et les cartes que vous connaissez peuvent être gardés dans ce navigateur, pour reprendre là où vous en étiez.",
+      progress_why: "Vos scores aux quiz, les cartes et vos réussites consécutives peuvent être gardés dans ce navigateur, pour reprendre là où vous en étiez. Maîtriser une question demande plusieurs jours de révision : il faut donc enregistrer.",
       progress_fact_local: "Tout reste sur cet appareil, dans ce navigateur. Il n'y a pas de compte.",
       progress_fact_nothing_sent: "Rien de vos réponses n'est envoyé au serveur.",
       progress_fact_persist: "Nous demandons aussi au navigateur un « stockage persistant » : sans lui, le navigateur peut effacer ces données de lui-même quand l'appareil manque de place. Certains navigateurs vous demandent de confirmer.",
@@ -116,9 +129,21 @@
       progress_blocked: "Ce navigateur bloque le stockage pour ce site (navigation privée ou réglages stricts) : la progression ne peut pas être enregistrée.",
       progress_forgotten: "Votre progression a été effacée de cet appareil.",
       progress_used: "{0} utilisés.",
-      progress_banner: "Vos réponses ne sont pas encore enregistrées.", progress_banner_more: "Enregistrer sur cet appareil",
+      progress_banner: "Vos réponses ne sont pas encore enregistrées : vos réussites consécutives ne passeront pas au jour suivant.", progress_banner_more: "Enregistrer sur cet appareil",
       progress_saved: "Progression enregistrée sur cet appareil",
-      progress_quiz: "Meilleur quiz {0} %", progress_cards: "{0}/{1} cartes sues"
+      progress_quiz: "Meilleur quiz {0} %", progress_cards: "{0}/{1} cartes sues",
+      progress_mastered: "{0}/{1} maîtrisés", progress_course_mastered: "Cours maîtrisé ✓",
+      study_coverage: "Réussites consécutives : {0} / {1}", study_item_target: "Réussites consécutives pour cet élément : {0} / {1}",
+      study_item_today: "Déjà compté aujourd'hui : la prochaine réussite consécutive comptera demain.",
+      study_items_mastered: "{0} éléments maîtrisés sur {1}", streak: "Série de {0} jours",
+      study_help: "Chaque question et chaque carte demande {0} bonnes réponses consécutives pour être maîtrisée (cartes : {1}), une par jour de révision ; une erreur remet le compte à zéro.",
+      item_mastered: "Maîtrisé ✓", course_mastered: "Cours maîtrisé",
+      course_mastered_description: "Cours maîtrisé. Chaque élément a atteint son objectif.",
+      cert_complete: "Tous les cours maîtrisés", cert_open: "Voir la certification",
+      cert_stat_courses: "Cours maîtrisés", cert_stat_items: "Éléments maîtrisés", cert_stat_days: "Jours de révision",
+      cert_stat_streak: "Série en cours",
+      celebrations_toggle: "Afficher les célébrations",
+      celebrations_help: "Une courte célébration quand une question, une carte, un cours ou tous les cours d'une certification sont maîtrisés."
     }
   };
 

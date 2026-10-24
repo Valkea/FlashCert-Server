@@ -12,8 +12,9 @@ generate anything. They can flag an error on any element, and the app collects t
 * **Add to FlashCert** on a shared course or certification hands it to the app, which adds this server by itself:
   a copy, a copy that follows the author's changes, or (when the owner allows it) the course itself, to edit it with
   them (see [Sharing with other people](#sharing-with-other-people)).
-* Visitor progress (quiz scores, known cards) stays in the visitor's browser, and only once they agree.
-  Turning it on also asks the browser for *persistent storage*; the page explains why.
+* Visitor progress stays in the visitor's browser, and only once they agree. It counts successes in a row as the app
+  does, so visitors without the app or an account master questions, cards, courses and certifications too, with the
+  app's celebrations. Turning it on also asks the browser for *persistent storage*; the page explains why.
 * One Docker image (Python, Flask, SQLAlchemy). SQLite by default, PostgreSQL by changing one URL. No CDN.
 
 ## Host your own
@@ -261,13 +262,16 @@ python3 tools/sync_branding.py ../FlashCert-android
 |---|---|
 | Notes | The course notes, with a table of contents, formulas (KaTeX, loaded only when a course has some) and a flag on each section |
 | Revision | Essentials, definitions, structure blocks (tables, steps, timelines, formulas, diagrams, rules, concepts) and "don't mix these up" |
-| Quiz | 5 / 10 / 20 / all questions from the bank: single choice, multiple choice, true/false, fill the blank, ordering. Missed and never-asked questions come first, "Retry my mistakes" replays the missed ones. Each answer shows the explanation and **Read the passage**. |
-| Cards | Flip, then "I knew it" / "Still learning"; restudy the ones still being learned. Cards still being learned come first, then new ones, then known ones, in random order within each group. |
+| Quiz | 5 / 10 / 20 / all questions from the bank: single choice, multiple choice, true/false, fill the blank, ordering. Questions recovering from a mistake come first, then never-asked ones, then due ones (the app's intervals), and "Retry my mistakes" replays the missed ones. Each answer shows the explanation and **Read the passage**. |
+| Cards | Flip, then "I knew it" / "Still learning"; restudy the ones still being learned. Cards come in the same order as questions, in random order within each group. |
+| Successes in a row | As in the app: each question and card counts its correct answers in a row, at most one per study day (which starts at 4 a.m.), and a mistake starts the count again. At its target (the author's certification's, else 3) an item is **Mastered**, and a course is mastered once all its items are (cards count only with a target). The course page shows its bar; the course lists show what is mastered. |
+| Celebrations | A mastered question or card gets its tag with a pop and sparks (a card, a stamp); a mastered course fills its bar and throws confetti, with a link to its certification's page; there, once every course is mastered, a recap (courses and items mastered, days studied, day streak) shows once per course count. "Reduce motion" shows each end state without animation; **Show celebrations** in **Your progress** turns them off. |
 | Importance | Once the app has a checklist for the course: **All**, **Essential**, **Important**, **Details** and **Other** chips on Notes, Quiz and Cards, as in the app. From All a tap shows that level alone, further taps add or remove levels; one choice applies to the three tabs. Quiz and Cards keep the items of the chosen levels (with their counts); Notes dims the lines and key points of other levels (headings and chapters without a checklist never are). |
 | Report an error | On the course, a notes section, a sheet item, a question or a card: a message and an optional name. A hidden honeypot field and a per-IP limit keep bots out. |
 
-Progress lives under `localStorage` keys starting with `fcs:`, written only after the visitor clicks
-**Save my progress**. Before that, answers are kept in memory for the visit and a small banner offers to save
+Progress lives under `localStorage` keys starting with `fcs:` (`fcs:course:{share id}` per course, `fcs:days` for
+the study days, `fcs:cert:{share id}` for a recap already shown), written only after the visitor clicks
+**Save my progress**. Mastering takes several study days, so in memory alone it rarely happens. Before that, answers are kept in memory for the visit and a small banner offers to save
 them (the answers given so far are saved too). **Your progress** in the header shows what was granted and how
 much space is used, and erases everything. `navigator.storage.persist()` is what protects the data from
 eviction: Firefox asks the visitor, Chrome decides from site engagement or a bookmark, and the page says
@@ -386,7 +390,8 @@ revision numbers and the last accepted baseline drive conflict detection.
   "cards": [
     { "id": "c7", "front": "…", "back": "…", "notion": "…", "sources": [{ "section_id": "1.1", "quote": "…" }] }
   ],
-  "notions": [{ "chapter": "Section", "quote": "…", "importance": 3 }]
+  "notions": [{ "chapter": "Section", "quote": "…", "importance": 3 }],
+  "review_targets": { "questions": 3, "cards": 3 }
 }
 ```
 
@@ -401,6 +406,9 @@ revision numbers and the last accepted baseline drive conflict detection.
   `##` chapter heading they belong to, a `quote` of the notes and their `importance` (`1`–`3`). The app sends
   both once a course has a checklist; the pages then filter by importance. Like `objective_ids`, a change to
   them alone isn't an edit for review.
+* `review_targets` (optional) are the successes in a row the course's certification asks of each question (`1`–`100`)
+  and card (`0`–`100`, `0` leaving cards out of mastery). The pages use them to count mastery as the app does, and
+  the app's defaults (3 and 3) without them. Out-of-range values are dropped with a warning.
 * A valid item comes back from `GET /api/v1/courses/{uid}` exactly as it was sent, so the app can compare its copy
   with the server's. Older servers (0.3) filled in empty `sources`, `accept` and `bank` lists and sorted `multi`
   answers; change reviews treat those differences as no edit.

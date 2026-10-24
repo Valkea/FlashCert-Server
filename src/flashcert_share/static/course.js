@@ -1,7 +1,7 @@
 /* Course page: notes, revision sheet, quiz and flashcards, read-only, with passages and error reports. */
 (function () {
   "use strict";
-  var t = FC.t, md = FC.md, progress = FC.progress;
+  var t = FC.t, md = FC.md, progress = FC.progress, celebrate = FC.celebrate;
   var root = document.getElementById("course");
   var data = JSON.parse(document.getElementById("course-data").textContent);
   var shareId = data.share_id;
@@ -703,6 +703,80 @@
     return g === norm(q.answer) || (q.accept || []).some(function (a) { return g === norm(a); });
   }
 
+  // --- Successes in a row ------------------------------------------------------------------------
+  // As in the app: each question and card counts its successes in a row, one per study day, against the target the
+  // author's certification sets. Every item counts whatever importance is shown, so "mastered" means what it does there.
+
+  var goal = progress.targets(data.review_targets);
+  var questionIds = questions.map(function (q) { return q.id; });
+  var cardIds = cards.map(function (c) { return c.id; });
+  var masteryBox = document.getElementById("mastery");
+  var certLink = document.getElementById("cert-link");
+
+  function stats() {
+    return progress.summary(shareId, questionIds, cardIds, goal);
+  }
+
+  /** The course's bar: successes in a row earned against the sum of targets, items mastered and the day streak. */
+  function meter(sum) {
+    var mastered = progress.courseMastered(sum);
+    var streak = progress.streak();
+    var detail = [t("study_items_mastered", sum.mastered, sum.items)];
+    if (streak > 1) detail.push(t("streak", streak));
+    return h("div", { class: "mastery-meter" + (mastered ? " mastered" : "") },
+      h("p", { class: "mastery-title", text: mastered ? t("course_mastered") : t("study_coverage", sum.done, sum.target) }),
+      h("span", { class: "meter-bar" }, h("span", { style: "width:" + (sum.target ? 100 * sum.done / sum.target : 0) + "%" })),
+      h("p", { class: "label", text: detail.join(" · ") }));
+  }
+
+  function showMastery() {
+    if (!masteryBox) return;
+    var sum = stats();
+    masteryBox.textContent = "";
+    masteryBox.hidden = !sum.items;
+    masteryBox.title = t("study_help", goal.questions, goal.cards);
+    if (sum.items) masteryBox.append(meter(sum));
+  }
+
+  /** At the end of a quiz or deck: the course's bar, which fills and celebrates when this session mastered the course. */
+  function sessionMeter(before) {
+    var after = stats();
+    if (!after.items) return null;
+    var box = meter(after);
+    if (progress.courseMastered(before) || !progress.courseMastered(after)) return box;
+    box.setAttribute("role", "status");
+    box.setAttribute("aria-label", t("course_mastered_description"));
+    if (certLink) box.append(h("a", { class: "btn small ghost", href: certLink.href }, icon("cap"), t("cert_open")));
+    if (celebrate.on()) {
+      box.classList.remove("mastered");
+      celebrate.course(box, before.target ? before.done / before.target : 0);
+      requestAnimationFrame(function () { box.scrollIntoView({ behavior: "smooth", block: "center" }); });
+    }
+    return box;
+  }
+
+  /** An item's successes in a row, or its "Mastered" tag. */
+  function itemStatus(s, target) {
+    if (target <= 0) return null;
+    if (progress.mastered(s, target)) return h("p", { class: "study-line" }, h("span", { class: "mastered-tag", text: t("item_mastered") }));
+    return h("p", { class: "study-line", text: t("study_item_target", Math.min(target, s[1]), target) });
+  }
+
+  /** Under an answer: where the item stands now; its tag pops when this answer mastered it. */
+  function itemLine(change, target) {
+    var line = itemStatus(change.after, target);
+    if (!line) return null;
+    var tag = line.querySelector(".mastered-tag");
+    if (tag && !progress.mastered(change.before, target) && celebrate.on()) celebrate.item(tag);
+    // A right answer the same study day: it counts tomorrow.
+    if (!tag && change.after[4] && change.before[0] > 0 && change.before[3] === change.after[3])
+      line.append(h("span", { class: "hint", text: " " + t("study_item_today") }));
+    return line;
+  }
+
+  showMastery();
+  progress.onChange(showMastery);
+
   var quiz = null;
 
   function quizSetup() {
@@ -710,7 +784,7 @@
     out.textContent = "";
     var d = progress.load(shareId);
     var shown = kept(questions);
-    var missed = shown.filter(function (q) { return d.q[q.id] && d.q[q.id][2]; });
+    var missed = shown.filter(function (q) { return d.q[q.id] && !d.q[q.id][4]; });
     var sizes = [5, 10, 20].filter(function (n) { return n < shown.length; });
     var chosen = sizes.indexOf(10) >= 0 ? 10 : (sizes[sizes.length - 1] || shown.length);
     var choice = h("div", { class: "segmented", role: "radiogroup", "aria-label": t("quiz_length") });
@@ -746,12 +820,13 @@
     }
   }
 
-  /** Missed last time first, then never asked, then the rest; random within each group. */
+  /** As in the app: recovering from a mistake first, then never asked, then due, then the rest; random within each group. */
   function pick(n, onlyMissed) {
     var d = progress.load(shareId);
+    var today = progress.today();
     function rank(q) {
       var s = d.q[q.id];
-      return s && s[2] ? 0 : !s ? 1 : 2;
+      return onlyMissed ? (s && !s[4] ? 0 : 9) : progress.priority(progress.item(shareId, "q", q.id), today);
     }
     var pool = shuffle(kept(questions).filter(function (q) { return !onlyMissed || rank(q) === 0; }));
     pool.sort(function (a, b) { return rank(a) - rank(b); });
@@ -759,7 +834,7 @@
   }
 
   function startQuiz(list) {
-    quiz = { list: list, i: 0, results: [] };
+    quiz = { list: list, i: 0, results: [], before: stats() };
     renderQuestion();
     panels.quiz.scrollIntoView({ block: "start" });
   }
@@ -788,10 +863,11 @@
 
     function finish(right, detail) {
       quiz.results.push({ q: q, right: right });
-      progress.answer(shareId, q.id, right);
+      var change = progress.answer(shareId, q.id, right);
       feedback.hidden = false;
       feedback.className = "feedback " + (right ? "right" : "wrong");
-      feedback.append(h("p", { class: "verdict" }, icon(right ? "check" : "x"), right ? t("quiz_right") : t("quiz_wrong")));
+      feedback.append(h("p", { class: "verdict" }, icon(right ? "check" : "x"), right ? t("quiz_right") : t("quiz_wrong")),
+        itemLine(change, goal.questions) || "");
       if (detail) feedback.append(detail);
       if (q.explanation) feedback.append(mdBlock(q.explanation, "explanation"));
       var src = sourcesRow(q);
@@ -950,7 +1026,8 @@
       h("p", { text: pct >= 70 ? t("quiz_passed") : t("quiz_failed") }),
       h("div", { class: "actions" },
         missed.length ? button(t("quiz_retry_missed", missed.length), "", function () { startQuiz(shuffle(missed.slice())); }) : null,
-        button(t("quiz_new"), missed.length ? "ghost" : "", function () { quiz = null; quizSetup(); }))));
+        button(t("quiz_new"), missed.length ? "ghost" : "", function () { quiz = null; quizSetup(); }))),
+      sessionMeter(quiz.before) || "");
     var list = h("ol", { class: "review-list" });
     quiz.results.forEach(function (r) {
       list.append(h("li", { class: r.right ? "right" : "wrong" },
@@ -979,8 +1056,8 @@
       out.append(h("div", { class: "card intro" }, chips, h("p", { class: "hint", text: t("importance_none") })));
       return;
     }
-    var known = shown.filter(function (c) { return d.c[c.id] && d.c[c.id][1]; }).length;
-    var learning = shown.filter(function (c) { return !(d.c[c.id] && d.c[c.id][1]); });
+    var known = shown.filter(function (c) { return d.c[c.id] && d.c[c.id][4]; }).length;
+    var learning = shown.filter(function (c) { return !(d.c[c.id] && d.c[c.id][4]); });
     var seenAny = shown.some(function (c) { return d.c[c.id]; });
     out.append(h("div", { class: "card intro" },
       chips,
@@ -994,18 +1071,20 @@
           ? button(t("cards_review", learning.length), "ghost", function () { startDeck(learning); }) : null)));
   }
 
-  /** Still learning first, then never seen, then known; random within each group, so one notion's cards don't follow each other. */
+  /**
+   * As in the app: recovering from a mistake first, then never seen, then due, then the rest; random within each group,
+   * so one notion's cards don't follow each other.
+   */
   function deckOrder(list) {
-    var d = progress.load(shareId);
+    var today = progress.today();
     function rank(c) {
-      var s = d.c[c.id];
-      return s && !s[1] ? 0 : !s ? 1 : 2;
+      return progress.priority(progress.item(shareId, "c", c.id), today);
     }
     return shuffle(list.slice()).sort(function (a, b) { return rank(a) - rank(b); });
   }
 
   function startDeck(list) {
-    deck = { list: deckOrder(list), i: 0, known: 0, unknown: [] };
+    deck = { list: deckOrder(list), i: 0, known: 0, unknown: [], before: stats() };
     renderCard();
   }
 
@@ -1034,15 +1113,26 @@
       flip.setAttribute("aria-expanded", "true");
       after.hidden = false;
       var src = sourcesRow(c);
-      after.append(src || "", h("div", { class: "actions grade" },
+      after.append(itemStatus(progress.item(shareId, "c", c.id), goal.cards) || "", src || "", h("div", { class: "actions grade" },
         button(t("cards_unknown"), "ghost bad-text", function () { grade(false); }, "x"),
         button(t("cards_known"), "good", function () { grade(true); }, "check")));
       after.querySelector(".grade .good").focus({ preventScroll: true });
     }
     function grade(knew) {
-      progress.card(shareId, c.id, knew);
+      var change = progress.card(shareId, c.id, knew);
       if (knew) deck.known++; else deck.unknown.push(c);
       deck.i++;
+      // A card just mastered gets its stamp and waits a moment before it leaves.
+      if (goal.cards > 0 && !progress.mastered(change.before, goal.cards) && progress.mastered(change.after, goal.cards)
+          && celebrate.on()) {
+        after.querySelectorAll("button").forEach(function (b) { b.disabled = true; });
+        celebrate.stamp(flip);
+        setTimeout(advance, celebrate.animates() ? 700 : 400);
+      } else {
+        advance();
+      }
+    }
+    function advance() {
       if (deck.i < n) renderCard(); else deckEnd();
     }
     flip.addEventListener("click", reveal);
@@ -1058,7 +1148,8 @@
       h("p", { text: t("cards_done_detail", deck.known, again.length) }),
       h("div", { class: "actions" },
         again.length ? button(t("cards_again", again.length), "", function () { startDeck(again); }) : null,
-        button(t("cards_restart"), again.length ? "ghost" : "", function () { deck = null; cardsSetup(); }))));
+        button(t("cards_restart"), again.length ? "ghost" : "", function () { deck = null; cardsSetup(); }))),
+      sessionMeter(deck.before) || "");
   }
 
   if (available.cards) {

@@ -21,10 +21,10 @@
 {% if not courses %}
 <p class="empty">{{ t.no_courses }}</p>
 {% endif %}
-<ul class="course-list">
+<ul class="course-list" id="cert-courses" data-cert="{{ share_id }}" data-name="{{ name }}">
   {% for c in courses %}
   <li class="course-item">
-    <a href="{{ url_for('course_page', share_id=c.share_id) }}" data-share-id="{{ c.share_id }}" data-cards="{{ c.card_count }}">
+    <a href="{{ url_for('course_page', share_id=c.share_id) }}" data-share-id="{{ c.share_id }}" data-questions="{{ c.question_count }}" data-cards="{{ c.card_count }}">
       <span class="course-title">{{ c.title }}</span>
       <span class="course-meta">
         {% if c.lang %}<span class="chip">{{ c.lang|upper }}</span>{% endif %}
@@ -32,8 +32,12 @@
         <span>{{ c.card_count }} {{ t.cards }}</span>
         <span>{{ t.updated }} <time datetime="{{ day(c.updated_at) }}">{{ day(c.updated_at) }}</time></span>
       </span>
+      <span class="course-progress" hidden></span>
     </a>
   </li>
   {% endfor %}
 </ul>
+{% endblock %}
+{% block scripts %}
+<script src="{{ url_for('static', filename='index.js') }}?v={{ version }}"></script>
 {% endblock %}

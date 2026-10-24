@@ -249,6 +249,17 @@ def create_app(config: Config | None = None, engine: Engine | None = None) -> Fl
                                                                    db.collection.c.uid == uid)).scalar_one_or_none()
         return row.certification if name is None else name
 
+    def certification_link(row) -> str | None:
+        """The page of the course's certification, when its owner shares one: where a visitor's mastered courses add up."""
+        uid = getattr(row, "certification_uid", None)
+        if uid is None or row.owner_id is None:
+            return None
+        with engine.connect() as conn:
+            share_id = conn.execute(select(db.collection.c.share_id).where(
+                db.collection.c.owner_id == row.owner_id, db.collection.c.uid == uid,
+                db.collection.c.visibility != "private")).scalar_one_or_none()
+        return None if share_id is None else url_for("certification_page", share_id=share_id)
+
     def course_summary(row, open_reports: int | None = None, role: str = "owner", owner: str | None = None) -> dict:
         out = {
             "uid": row.uid,
@@ -393,6 +404,7 @@ def create_app(config: Config | None = None, engine: Engine | None = None) -> Fl
             url=share_url(row.share_id),
             unlisted=row.visibility != "public",
             app_link=app_link(share_url(row.share_id)) if actions(row.link_actions, row.visibility) else None,
+            cert_link=certification_link(row),
         )
 
     @app.get("/cert/<share_id>")
@@ -403,7 +415,7 @@ def create_app(config: Config | None = None, engine: Engine | None = None) -> Fl
         with engine.connect() as conn:
             courses = db.collection_courses(conn, col, include_private=False)
         url = certification_url(col.share_id)
-        return render_template("certification.html", name=col.name, courses=courses, url=url,
+        return render_template("certification.html", name=col.name, share_id=col.share_id, courses=courses, url=url,
                                author=author(col.owner_id), unlisted=col.visibility != "public",
                                app_link=app_link(url) if actions(col.link_actions, col.visibility) else None,
                                day=lambda ms: datetime.fromtimestamp(ms / 1000, tz=timezone.utc).date().isoformat())

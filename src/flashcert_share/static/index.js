@@ -1,4 +1,5 @@
-/* Course list: search, and the visitor's own progress when they chose to save it on this device. */
+/* Course lists: search, the visitor's own progress when they chose to save it on this device, and on a certification's
+ * page the moment every course on it is mastered. */
 (function () {
   "use strict";
   var t = FC.t;
@@ -27,6 +28,12 @@
     });
   }
 
+  /** The course's standing as its page last counted it, unless the course has changed since. */
+  function standing(a, d) {
+    var sum = d.sum;
+    return sum && String(sum.qn) === a.dataset.questions && String(sum.cn) === a.dataset.cards ? sum : null;
+  }
+
   function badges() {
     var on = FC.progress.enabled();
     items.forEach(function (li) {
@@ -36,19 +43,43 @@
       box.hidden = true;
       if (!on) return;
       var d = FC.progress.load(a.dataset.shareId);
+      var sum = standing(a, d);
       var parts = [];
+      if (FC.progress.courseMastered(sum)) parts.push(t("progress_course_mastered"));
+      else if (sum && sum.mastered) parts.push(t("progress_mastered", sum.mastered, sum.items));
       if (d.quizzes.length) {
         var best = Math.max.apply(null, d.quizzes.map(function (z) { return Math.round(100 * z.score / Math.max(1, z.total)); }));
         parts.push(t("progress_quiz", best));
       }
-      var known = Object.keys(d.c).filter(function (k) { return d.c[k][1]; }).length;
-      if (known) parts.push(t("progress_cards", known, a.dataset.cards));
       if (!parts.length) return;
       box.textContent = parts.join(" · ");
       box.hidden = false;
     });
   }
 
+  /**
+   * On a certification's page: once every course on it is mastered, the recap, as in the app. It shows once per
+   * course count, so a course added and mastered later earns it again.
+   */
+  function certificationMoment() {
+    var list = document.getElementById("cert-courses");
+    if (!list || !items.length || !FC.celebrate.on()) return;
+    var sums = items.map(function (li) {
+      var a = li.querySelector("a[data-share-id]");
+      return standing(a, FC.progress.load(a.dataset.shareId));
+    });
+    if (!sums.every(FC.progress.courseMastered) || FC.progress.certCelebrated(list.dataset.cert) >= items.length) return;
+    FC.progress.setCertCelebrated(list.dataset.cert, items.length);
+    FC.celebrate.certification({
+      name: list.dataset.name,
+      courses: sums.map(function () { return 1; }),
+      items: sums.reduce(function (n, sum) { return n + sum.mastered; }, 0),
+      days: FC.progress.daysStudied(),
+      streak: FC.progress.streak()
+    });
+  }
+
   badges();
+  certificationMoment();
   FC.progress.onChange(badges);
 })();
