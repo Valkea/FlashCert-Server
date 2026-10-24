@@ -420,6 +420,11 @@ def create_app(config: Config | None = None, engine: Engine | None = None) -> Fl
                                app_link=app_link(url) if actions(col.link_actions, col.visibility) else None,
                                day=lambda ms: datetime.fromtimestamp(ms / 1000, tz=timezone.utc).date().isoformat())
 
+    @app.get("/progress")
+    def progress_page():
+        """The visitor's own progress across courses, drawn from this browser's storage: the server knows none of it."""
+        return render_template("progress.html")
+
     @app.get("/healthz")
     def healthz():
         with engine.connect() as conn:

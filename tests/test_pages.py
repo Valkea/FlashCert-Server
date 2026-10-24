@@ -43,7 +43,7 @@ def test_unknown_course_is_a_404_page(client):
 
 
 def test_static_assets(client):
-    for path in ("style.css", "course.js", "md.js", "progress.js", "celebrate.js", "i18n.js", "index.js", "icon.svg",
+    for path in ("style.css", "course.js", "md.js", "progress.js", "celebrate.js", "stats.js", "progress-page.js", "i18n.js", "index.js", "icon.svg",
                  "appearance.js", "palettes.css", "logo.svg", "fonts/grotesk_bold.ttf",
                  "vendor/katex/katex.min.js", "vendor/katex/katex.min.css"):
         assert client.get(f"/static/{path}").status_code == 200, path
@@ -66,3 +66,10 @@ def test_share_url_from_proxy_headers(tmp_path):
         "Authorization": f"Bearer {raw}", "X-Forwarded-Proto": "https", "X-Forwarded-Host": "learn.example.org",
         "X-Forwarded-Prefix": "/courses"})
     assert r.get_json()["url"].startswith("https://learn.example.org/courses/c/")
+
+
+def test_progress_page(client):
+    page = client.get("/progress")
+    assert page.status_code == 200 and b'id="stats-page"' in page.data and b"progress-page.js" in page.data
+    assert b'<meta name="robots" content="noindex">' in page.data
+    assert b'href="/progress" id="progress-stats"' in client.get("/").data

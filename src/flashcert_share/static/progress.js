@@ -5,7 +5,8 @@
  *
  * As in the app (ItemReview), each question and card counts its successes in a row, at most one per study day; a
  * mistake starts the count again. An item that reaches its target and isn't recovering from a mistake is mastered,
- * and a course is mastered when all its items are. Each answer also marks the study day, for the day streak.
+ * and a course is mastered when all its items are. Each answer also marks the study day, for the day streak, and
+ * counts in the course's daily log, for the progress figures and charts.
  */
 (function () {
   "use strict";
@@ -15,9 +16,9 @@
   var DAYS = "fcs:days";
   var CERT = "fcs:cert:";
   var DISMISSED = "fcs:banner-dismissed";
-  var VERSION = 2;
+  var VERSION = 3;
   /** Same defaults as the app: 3 successes in a row, study days starting at 4 a.m. */
-  var TARGET = 3, DAY_START = 4, MAX_DAYS = 800;
+  var TARGET = 3, DAY_START = 4, MAX_DAYS = 800, MAX_LOG = 400;
   var GAPS = [1, 3, 7, 16, 35];
   var mem = {};
   var days = null;
@@ -57,10 +58,13 @@
     return format(new Date(+p[0], +p[1] - 1, +p[2] + n));
   }
 
-  // --- One item: [encounters, streak, lapses, last study day, last answer right (0/1), interval in days] ---------
+  // --- One item: [encounters, streak, lapses, last study day, last answer right (0/1), interval in days, answers,
+  // right answers]. Encounters count study days; answers count every answer, retries included. ---------------------
+
+  var LENGTH = 8;
 
   function state(s) {
-    return Array.isArray(s) && s.length === 6 ? s : [0, 0, 0, null, 0, 0];
+    return Array.isArray(s) && s.length === LENGTH ? s : [0, 0, 0, null, 0, 0, 0, 0];
   }
 
   /** Retries the same study day change the latest result but earn no extra success in a row. */
@@ -69,7 +73,8 @@
     var streak = right ? before[1] + (spaced ? 1 : 0) : 0;
     var gap = streak <= 0 ? 1 : streak <= GAPS.length ? GAPS[streak - 1] : Math.min(90, Math.max(1, before[5] * 2));
     if (right && !spaced) gap = Math.max(1, before[5]);
-    return [before[0] + (spaced ? 1 : 0), streak, before[2] + (right ? 0 : 1), spaced ? day : before[3], right ? 1 : 0, gap];
+    return [before[0] + (spaced ? 1 : 0), streak, before[2] + (right ? 0 : 1), spaced ? day : before[3], right ? 1 : 0, gap,
+      before[6] + 1, before[7] + (right ? 1 : 0)];
   }
 
   function recovering(s) { return s[0] > 0 && (!s[4] || (s[2] > 0 && s[1] < 2)); }
@@ -81,6 +86,19 @@
   /** Recovering first, then never seen, then due, then the rest: the app's order of review. */
   function priority(s, today) { return recovering(s) ? 0 : s[0] === 0 ? 1 : due(s, today) ? 2 : 3; }
 
+  /** Study days the item comes back on until {@code end}, assuming right answers, maintenance included (as in the app). */
+  function upcoming(s, today, end) {
+    var out = [];
+    var day = s[3] == null ? today : addDays(s[3], Math.max(1, s[5]));
+    if (day < today) day = today;
+    while (day <= end) {
+      out.push(day);
+      s = next(s, true, day);
+      day = addDays(s[3], Math.max(1, s[5]));
+    }
+    return out;
+  }
+
   // --- Courses ------------------------------------------------------------------------------------
 
   function entries(raw, upgrade) {
@@ -90,25 +108,41 @@
       var s = raw[k];
       if (!Array.isArray(s)) return;
       s = upgrade ? upgrade(s) : s;
-      if (s.length === 6) out[k] = s;
+      if (s.length === LENGTH) out[k] = s;
     });
     return out;
   }
 
   // Before successes in a row, questions kept [asked, missed, last wrong] and cards [seen, known], without days:
   // their counts stay, their streaks start again.
-  function fromAnswers(s) { return [s[0] || 0, 0, s[1] || 0, null, s[2] ? 0 : 1, 0]; }
-  function fromGrades(s) { return [s[0] || 0, 0, 0, null, s[1] ? 1 : 0, 0]; }
+  function fromAnswers(s) { return [s[0] || 0, 0, s[1] || 0, null, s[2] ? 0 : 1, 0, s[0] || 0, Math.max(0, (s[0] || 0) - (s[1] || 0))]; }
+  function fromGrades(s) { return [s[0] || 0, 0, 0, null, s[1] ? 1 : 0, 0, s[0] || 0, s[1] ? 1 : 0]; }
+  // Version 2 had no answer totals: every mistake was counted, and at least one answer per study day.
+  function withTotals(s) {
+    if (s.length !== 6) return s;
+    var answers = Math.max(s[0], s[2] + (s[4] ? 1 : 0));
+    return s.concat([answers, Math.max(0, answers - s[2])]);
+  }
+
+  function object(x) { return x && typeof x === "object" && !Array.isArray(x) ? x : null; }
 
   function clean(d) {
-    d = d && typeof d === "object" ? d : {};
-    var old = d.v !== VERSION;
+    d = object(d) || {};
+    var questions = d.v == null ? fromAnswers : d.v === 2 ? withTotals : null;
+    var grades = d.v == null ? fromGrades : d.v === 2 ? withTotals : null;
+    var log = {};
+    Object.keys(object(d.log) || {}).forEach(function (day) {
+      var e = d.log[day];
+      if (/^\d{4}-\d\d-\d\d$/.test(day) && Array.isArray(e) && e.length === 2) log[day] = e;
+    });
     return {
       v: VERSION,
-      q: entries(d.q, old ? fromAnswers : null),
-      c: entries(d.c, old ? fromGrades : null),
+      q: entries(d.q, questions),
+      c: entries(d.c, grades),
       quizzes: Array.isArray(d.quizzes) ? d.quizzes : [],
-      sum: d.sum && typeof d.sum === "object" ? d.sum : null
+      sum: object(d.sum),
+      log: log,
+      meta: object(d.meta)
     };
   }
 
@@ -176,6 +210,10 @@
     var before = state(d[kind][itemId]);
     var after = next(before, right, day);
     d[kind][itemId] = after;
+    var e = d.log[day] || [0, 0];
+    d.log[day] = [e[0] + 1, e[1] + (right ? 1 : 0)];
+    var logged = Object.keys(d.log);
+    if (logged.length > MAX_LOG) logged.sort().slice(0, logged.length - MAX_LOG).forEach(function (x) { delete d.log[x]; });
     studied(day);
     changed(id);
     return { before: before, after: after };
@@ -227,6 +265,30 @@
       d.sum = out;
       write(id);
     }
+    return out;
+  }
+
+  /** What the progress page lists a course by: kept with its progress, since the page has no course at hand. */
+  function describe(id, meta) {
+    var d = load(id);
+    var started = Object.keys(d.q).length || Object.keys(d.c).length;
+    if (!started || JSON.stringify(meta) === JSON.stringify(d.meta)) return;
+    d.meta = meta;
+    write(id);
+  }
+
+  /** Every course with progress in this browser (saved, or answered during this visit), by share id. */
+  function courses() {
+    var ids = {};
+    Object.keys(mem).forEach(function (id) { ids[id] = true; });
+    if (enabled()) {
+      savedKeys().forEach(function (k) { if (k.indexOf(PREFIX) === 0) ids[k.slice(PREFIX.length)] = true; });
+    }
+    var out = {};
+    Object.keys(ids).forEach(function (id) {
+      var d = load(id);
+      if (Object.keys(d.q).length || Object.keys(d.c).length || d.quizzes.length) out[id] = d;
+    });
     return out;
   }
 
@@ -389,7 +451,13 @@
     card: card,
     quizDone: quizDone,
     today: studyDay,
+    addDays: addDays,
+    upcoming: upcoming,
+    due: due,
+    describe: describe,
+    courses: courses,
     item: function (id, kind, itemId) { return state(load(id)[kind][itemId]); },
+    unseen: function () { return state(null); },
     recovering: recovering,
     mastered: mastered,
     priority: priority,

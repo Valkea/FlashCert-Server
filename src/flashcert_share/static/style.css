@@ -493,3 +493,47 @@ body:has(.save-banner) .back-to { bottom: 76px; }
   @keyframes rise-in { from { opacity: 0; transform: translateY(16px) scale(0.96); } to { opacity: 1; transform: none; } }
   @keyframes ring-fill { from { stroke-dasharray: 0 100; } }
 }
+
+/* --- Progress figures (static/stats.js), as in the app's progress screen --- */
+.stats { display: grid; gap: 12px; }
+.stats-group { margin: 14px 0 0; font-size: 18px; color: var(--muted); }
+.stats-group:first-child { margin-top: 4px; }
+.stats-card { display: grid; gap: 8px; }
+.stats-card .hint { margin: 0; }
+.stats-card .actions { margin-top: 4px; }
+.stats-title { margin: 0; font-size: 16px; }
+.stat-tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(108px, 1fr)); gap: 10px; }
+.stat-tile { display: grid; gap: 2px; padding: 14px 16px; border-radius: 18px; background: var(--surface); border: 1px solid var(--stroke); }
+.stat-value { font-family: var(--display); font-size: 26px; font-weight: 800; line-height: 1.1; }
+.stat-label { color: var(--muted); font-size: 13px; font-weight: 600; }
+.stat-delta { font-size: 13px; font-weight: 700; }
+.stat-delta.up { color: var(--good); }
+.stat-delta.down { color: var(--warn); }
+.chart { display: grid; gap: 4px; }
+.bars { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(0, 36px); justify-content: space-between; align-items: end; gap: 2px; height: 120px;
+  padding-bottom: 1px; border-bottom: 1px solid var(--stroke); }
+.bar { display: flex; flex-direction: column-reverse; height: 100%; min-width: 0; }
+.bar .seg { display: block; width: 100%; }
+.bar .seg.right { background: var(--chart-right); border-radius: 0 0 2px 2px; }
+.bar .seg.wrong { background: var(--chart-wrong); border-radius: 3px 3px 0 0; }
+.bar .seg.all { background: var(--accent); border-radius: 3px 3px 0 0; }
+.bars-axis { display: flex; justify-content: space-between; color: var(--muted); font-size: 12px; }
+.stat-rows { list-style: none; padding: 0; margin: 0; display: grid; gap: 12px; }
+.stat-row { display: grid; gap: 5px; }
+.stat-row-head { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 2px 12px; font-size: 14px; }
+.stat-row-label { font-weight: 650; }
+a.stat-row-label { color: var(--accent-text); text-decoration: none; }
+a.stat-row-label:hover { text-decoration: underline; }
+.stat-row-detail { color: var(--muted); }
+.stat-row .meter-bar span { background: var(--accent); }
+.stat-row.done .meter-bar span { background: var(--good); }
+.stat-row.weak .stat-row-label { color: var(--warn); }
+.stat-row .btn { justify-self: start; }
+.stat-row .hint { font-size: 13px; }
+.split-bar { display: flex; height: 10px; border-radius: 999px; overflow: hidden; background: var(--surface-alt); }
+.split-bar .seg.mastered, .legend .mastered::before { background: var(--good); }
+.split-bar .seg.learning, .legend .learning::before { background: var(--accent); }
+.split-bar .seg.fresh, .legend .fresh::before { background: var(--stroke); }
+.legend { display: flex; flex-wrap: wrap; gap: 4px 16px; list-style: none; padding: 0; margin: 8px 0 0; font-size: 13px; color: var(--muted); }
+.legend li::before { content: ""; display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin-right: 6px; vertical-align: -1px; }
+#stats-page { margin-bottom: 40px; }

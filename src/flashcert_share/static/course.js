@@ -181,13 +181,15 @@
     notes: document.getElementById("panel-notes"),
     sheet: document.getElementById("panel-sheet"),
     quiz: document.getElementById("panel-quiz"),
-    cards: document.getElementById("panel-cards")
+    cards: document.getElementById("panel-cards"),
+    stats: document.getElementById("panel-stats")
   };
   var available = {
     notes: true,
     sheet: !!(sheet && Object.keys(sheet).length),
     quiz: questions.length > 0,
-    cards: cards.length > 0
+    cards: cards.length > 0,
+    stats: questions.length + cards.length > 0
   };
   var tabs = root.querySelectorAll("[role=tab]");
   var current = null;
@@ -204,8 +206,15 @@
       var on = b.dataset.tab === name;
       b.setAttribute("aria-selected", on ? "true" : "false");
       b.tabIndex = on ? 0 : -1;
+      // On a narrow screen the tabs scroll sideways: the chosen one stays in sight.
+      var bar = b.parentNode;
+      if (on && bar.scrollWidth > bar.clientWidth) {
+        var box = b.getBoundingClientRect(), frame = bar.getBoundingClientRect();
+        bar.scrollLeft += box.left - frame.left - (frame.width - box.width) / 2;
+      }
     });
     Object.keys(panels).forEach(function (k) { panels[k].hidden = k !== name; });
+    if (name === "stats") renderStats();
     if (push !== false) history.replaceState(null, "", "#" + name);
     if (back) requestAnimationFrame(function () { window.scrollTo(0, back.y); });
   }
@@ -1156,6 +1165,165 @@
     cardsSetup();
     if (ranked) onImportance.push(function () { if (!deck) cardsSetup(); });
   }
+
+  // --- Progress -----------------------------------------------------------------------------------
+  // As in the app's progress screen, for this course: Now (figures, what to review today), Past (answers per day, by
+  // question type, weakest notions, flashcards, quizzes) and Future (reviews to come). Every item counts, whatever
+  // importance is shown.
+
+  var TYPE_LABELS = { mcq: "type_mcq", multi: "type_multi", true_false: "type_true_false", cloze: "type_cloze", order: "type_order" };
+
+  function itemState(kind, item) {
+    return progress.item(shareId, kind, item.id);
+  }
+
+  function toReview(kind, list, today) {
+    return list.filter(function (x) {
+      var s = itemState(kind, x);
+      return s[0] > 0 && (progress.recovering(s) || progress.due(s, today));
+    });
+  }
+
+  /** A notion's items, its mistakes first, as the app opens its course's mistakes. */
+  function byPriority(kind, list, today) {
+    return shuffle(list.slice()).sort(function (a, b) {
+      return progress.priority(itemState(kind, a), today) - progress.priority(itemState(kind, b), today);
+    });
+  }
+
+  function practise(kind, list) {
+    if (kind === "q") {
+      select("quiz");
+      startQuiz(list.slice(0, 20));
+    } else {
+      select("cards");
+      startDeck(list);
+    }
+  }
+
+  function renderStats() {
+    var S = FC.stats, out = panels.stats;
+    var d = progress.load(shareId), today = progress.today(), sum = stats();
+    out.textContent = "";
+
+    // Now
+    out.append(S.group("progress_now"));
+    out.append(S.tiles(S.answerTiles([d.log]).concat([
+      { value: sum.items ? sum.mastered + "/" + sum.items : null, label: t("stat_mastered") },
+      { value: progress.streak(), label: t("stat_streak") }])));
+    var dueQ = toReview("q", questions, today);
+    var dueC = goal.cards > 0 ? toReview("c", cards, today) : [];
+    var fresh = questions.filter(function (q) { return itemState("q", q)[0] === 0; }).length
+      + (goal.cards > 0 ? cards.filter(function (c) { return itemState("c", c)[0] === 0; }).length : 0);
+    var now = S.section(t("due_title"));
+    now.append(h("p", { text: dueQ.length || dueC.length ? t("due_detail", dueQ.length, dueC.length) : t("due_none") }));
+    if (fresh) now.append(h("p", { class: "hint", text: t("due_new", fresh) }));
+    var acts = h("div", { class: "actions" },
+      dueQ.length ? button(t("due_questions", dueQ.length), "", function () { practise("q", byPriority("q", dueQ, today)); }) : null,
+      dueC.length ? button(t("due_cards", dueC.length), dueQ.length ? "ghost" : "", function () { practise("c", byPriority("c", dueC, today)); }) : null);
+    if (acts.childNodes.length) now.append(acts);
+    if (!progress.enabled()) {
+      now.append(h("p", { class: "hint", text: t("stats_not_saved") }),
+        button(t("progress_banner_more"), "small ghost", progress.open, "save"));
+    }
+    out.append(now);
+
+    // Past
+    out.append(S.group("progress_past"));
+    var days = S.series([d.log], S.WINDOW);
+    var answered = days.reduce(function (a, x) { return a + x.n; }, 0);
+    var right = days.reduce(function (a, x) { return a + x.right; }, 0);
+    var daily = S.section(t("daily_title"), answered ? t("daily_total", answered, S.pct(right, answered)) : t("daily_total_none"));
+    daily.append(S.bars(days));
+    out.append(daily);
+
+    var types = {};
+    questions.forEach(function (q) {
+      var st = itemState("q", q);
+      var e = types[q.type] || (types[q.type] = { n: 0, right: 0 });
+      e.n += st[6]; e.right += st[7];
+    });
+    var typeRows = Object.keys(types).filter(function (k) { return types[k].n; }).map(function (k) {
+      return { key: k, label: t(TYPE_LABELS[k] || k), n: types[k].n, pct: S.pct(types[k].right, types[k].n) };
+    }).sort(function (a, b) { return a.pct - b.pct; });
+    if (typeRows.length) {
+      var weakest = typeRows.length > 1 && typeRows[0].pct < 100 ? typeRows[0] : null;
+      var byType = S.section(t("types_title"), weakest ? t("types_weakest", weakest.label, weakest.pct) : null);
+      byType.append(S.rows(typeRows.map(function (r) {
+        return { label: r.label, detail: t("types_row", r.pct, r.n), fraction: r.pct / 100, cls: r === weakest ? "weak" : "" };
+      })));
+      out.append(byType);
+    }
+
+    var notions = {};
+    function addNotion(kind, item) {
+      var name = typeof item.notion === "string" ? item.notion.trim() : "";
+      if (!name) return;
+      var st = itemState(kind, item);
+      var e = notions[name] || (notions[name] = { name: name, n: 0, right: 0, wrong: 0, q: [], c: [] });
+      e.n += st[6]; e.right += st[7];
+      if (st[0] > 0 && !st[4]) e.wrong++;
+      e[kind].push(item);
+    }
+    questions.forEach(function (q) { addNotion("q", q); });
+    cards.forEach(function (c) { addNotion("c", c); });
+    var answeredNotions = Object.keys(notions).map(function (k) { return notions[k]; }).filter(function (e) { return e.n; });
+    if (answeredNotions.length) {
+      var weak = answeredNotions.filter(function (e) { return e.right < e.n || e.wrong; }).sort(function (a, b) {
+        return a.right / a.n - b.right / b.n || b.wrong - a.wrong;
+      }).slice(0, 6);
+      var notionBox = S.section(t("weak_title"), weak.length ? t("weak_hint") : t("weak_none"));
+      if (weak.length) notionBox.append(S.rows(weak.map(function (e) {
+        var kind = e.q.length ? "q" : "c";
+        return {
+          label: e.name, detail: t("weak_row", S.pct(e.right, e.n), e.wrong), fraction: e.right / e.n,
+          action: button(t("weak_practise"), "small ghost", function () { practise(kind, byPriority(kind, e[kind], today)); })
+        };
+      })));
+      out.append(notionBox);
+    }
+
+    if (cards.length) {
+      var parts = { mastered: 0, learning: 0, fresh: 0 };
+      cards.forEach(function (c) {
+        var st = itemState("c", c);
+        if (st[0] === 0) parts.fresh++;
+        else if (progress.mastered(st, Math.max(1, goal.cards))) parts.mastered++;
+        else parts.learning++;
+      });
+      var deckBox = S.section(t("cards_title"));
+      deckBox.append(S.split([
+        { n: parts.mastered, cls: "mastered", label: t("cards_part_mastered") },
+        { n: parts.learning, cls: "learning", label: t("cards_part_learning") },
+        { n: parts.fresh, cls: "fresh", label: t("cards_part_new") }]));
+      out.append(deckBox);
+    }
+
+    if (d.quizzes.length) {
+      var scores = d.quizzes.map(function (z) { return Math.round(100 * z.score / Math.max(1, z.total)); });
+      var quizBox = S.section(t("quizzes_title"), t("quizzes_row", scores.length, Math.max.apply(null, scores), scores[scores.length - 1]));
+      quizBox.append(S.bars(d.quizzes.slice(-S.WINDOW).map(function (z) {
+        return { day: progress.today(z.at), n: z.total, right: z.score };
+      })));
+      out.append(quizBox);
+    }
+
+    // Future
+    out.append(S.group("progress_future"));
+    var states = questions.map(function (q) { return itemState("q", q); });
+    if (goal.cards > 0) states = states.concat(cards.map(function (c) { return itemState("c", c); }));
+    var ahead = S.upcomingDays(states, S.AHEAD);
+    var coming = S.section(t("upcoming_title"), t("upcoming_total", ahead.reduce(function (a, x) { return a + x.n; }, 0)));
+    coming.append(S.bars(ahead, true), h("p", { class: "hint", text: t("upcoming_note") }));
+    out.append(coming);
+  }
+
+  // What the progress page lists this course by.
+  progress.describe(shareId, { title: data.title, cert: data.certification || null, path: location.pathname, targets: goal });
+  progress.onChange(function (id) {
+    if (id === shareId || id === null) progress.describe(shareId, { title: data.title, cert: data.certification || null, path: location.pathname, targets: goal });
+    if (current === "stats") renderStats();
+  });
 
   // Refresh the start screens when progress is turned on or erased.
   progress.onChange(function (id) {

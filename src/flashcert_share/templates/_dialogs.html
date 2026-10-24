@@ -15,6 +15,7 @@
     </label>
     <div class="dialog-actions">
       <button type="button" class="btn danger ghost" id="progress-forget" data-t="progress_forget" hidden></button>
+      <a class="btn ghost" href="{{ url_for('progress_page') }}" id="progress-stats"><svg class="icon"><use href="#i-chart"/></svg><span data-t="stats_open"></span></a>
       <span class="spacer"></span>
       <button value="cancel" class="btn ghost" id="progress-later" data-t="not_now"></button>
       <button type="button" class="btn" id="progress-enable" data-t="progress_enable"></button>

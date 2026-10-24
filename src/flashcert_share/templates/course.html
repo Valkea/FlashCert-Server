@@ -43,17 +43,20 @@
     <button type="button" role="tab" id="tab-sheet" aria-controls="panel-sheet" data-tab="sheet"><svg class="icon"><use href="#i-cap"/></svg><span data-t="tab_sheet"></span></button>
     <button type="button" role="tab" id="tab-quiz" aria-controls="panel-quiz" data-tab="quiz"><svg class="icon"><use href="#i-quiz"/></svg><span data-t="tab_quiz"></span></button>
     <button type="button" role="tab" id="tab-cards" aria-controls="panel-cards" data-tab="cards"><svg class="icon"><use href="#i-cards"/></svg><span data-t="tab_cards"></span></button>
+    <button type="button" role="tab" id="tab-stats" aria-controls="panel-stats" data-tab="stats"><svg class="icon"><use href="#i-chart"/></svg><span data-t="tab_stats"></span></button>
   </nav>
 
   <section class="panel notes" id="panel-notes" role="tabpanel" aria-labelledby="tab-notes" hidden></section>
   <section class="panel sheet" id="panel-sheet" role="tabpanel" aria-labelledby="tab-sheet" hidden></section>
   <section class="panel quiz" id="panel-quiz" role="tabpanel" aria-labelledby="tab-quiz" hidden></section>
   <section class="panel cards" id="panel-cards" role="tabpanel" aria-labelledby="tab-cards" hidden></section>
+  <section class="panel stats" id="panel-stats" role="tabpanel" aria-labelledby="tab-stats" hidden></section>
   <noscript><p class="empty">{{ t.noscript }}</p></noscript>
 </article>
 <script type="application/json" id="course-data">{{ course|tojson }}</script>
 {% endblock %}
 {% block scripts %}
 <script src="{{ url_for('static', filename='md.js') }}?v={{ version }}"></script>
+<script src="{{ url_for('static', filename='stats.js') }}?v={{ version }}"></script>
 <script src="{{ url_for('static', filename='course.js') }}?v={{ version }}"></script>
 {% endblock %}

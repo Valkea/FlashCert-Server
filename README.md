@@ -267,9 +267,15 @@ python3 tools/sync_branding.py ../FlashCert-android
 | Successes in a row | As in the app: each question and card counts its correct answers in a row, at most one per study day (which starts at 4 a.m.), and a mistake starts the count again. At its target (the author's certification's, else 3) an item is **Mastered**, and a course is mastered once all its items are (cards count only with a target). The course page shows its bar; the course lists show what is mastered. |
 | Celebrations | A mastered question or card gets its tag with a pop and sparks (a card, a stamp); a mastered course fills its bar and throws confetti, with a link to its certification's page; there, once every course is mastered, a recap (courses and items mastered, days studied, day streak) shows once per course count. "Reduce motion" shows each end state without animation; **Show celebrations** in **Your progress** turns them off. |
 | Importance | Once the app has a checklist for the course: **All**, **Essential**, **Important**, **Details** and **Other** chips on Notes, Quiz and Cards, as in the app. From All a tap shows that level alone, further taps add or remove levels; one choice applies to the three tabs. Quiz and Cards keep the items of the chosen levels (with their counts); Notes dims the lines and key points of other levels (headings and chapters without a checklist never are). |
+| Progress | As in the app's progress screen, for this course. **Now**: share right and answers over 30 days with their change from the 30 days before, items mastered, day streak, and today's questions and cards to review (one tap opens them). **Past**: answers per day, by question type (the weakest marked), weakest notions (each with **Practise**, mistakes first), flashcards mastered / learning / new, quizzes. **Future**: item encounters over the next 14 days, assuming right answers. Every item counts, whatever importance is shown. |
 | Report an error | On the course, a notes section, a sheet item, a question or a card: a message and an optional name. A hidden honeypot field and a per-IP limit keep bots out. |
 
-Progress lives under `localStorage` keys starting with `fcs:` (`fcs:course:{share id}` per course, `fcs:days` for
+`/progress` (**See my progress** in **Your progress**) gathers the same figures across courses, the courses grouped
+by certification with their bars and what to review today, and the reviews to come. It reads only this browser:
+the server knows nothing of it, and a course shows up once it has been answered on its page.
+
+Progress lives under `localStorage` keys starting with `fcs:` (`fcs:course:{share id}` per course, with its items, a
+daily log of answers and the title it is listed by, `fcs:days` for
 the study days, `fcs:cert:{share id}` for a recap already shown), written only after the visitor clicks
 **Save my progress**. Mastering takes several study days, so in memory alone it rarely happens. Before that, answers are kept in memory for the visit and a small banner offers to save
 them (the answers given so far are saved too). **Your progress** in the header shows what was granted and how
