@@ -387,7 +387,9 @@
   var dialog = document.getElementById("progress-dialog");
   var status = document.getElementById("progress-status");
   var enableBtn = document.getElementById("progress-enable");
+  var forgetZone = document.getElementById("progress-forget-zone");
   var forgetBtn = document.getElementById("progress-forget");
+  var forgetAsk = document.getElementById("progress-forget-confirm");
   var laterBtn = document.getElementById("progress-later");
 
   function humanBytes(n) {
@@ -399,7 +401,11 @@
   function refreshDialog(message) {
     var on = enabled();
     enableBtn.hidden = on || !ls;
-    forgetBtn.hidden = !on;
+    // Off, erasing keeps its room, so turning saving on moves nothing in the dialog.
+    forgetZone.hidden = false;
+    forgetZone.classList.toggle("off", !on);
+    forgetBtn.hidden = false;
+    forgetAsk.hidden = true;
     laterBtn.textContent = on ? t("close") : t("not_now");
     status.textContent = message || "";
     if (!ls) {
@@ -428,7 +434,18 @@
       refreshDialog(result === "blocked" ? t("progress_blocked") : t("progress_on_" + result));
     });
   });
+  // Erasing can't be undone: it asks first, in the dialog.
   forgetBtn.addEventListener("click", function () {
+    forgetBtn.hidden = true;
+    forgetAsk.hidden = false;
+    document.getElementById("progress-forget-keep").focus();
+  });
+  document.getElementById("progress-forget-keep").addEventListener("click", function () {
+    forgetAsk.hidden = true;
+    forgetBtn.hidden = false;
+    forgetBtn.focus();
+  });
+  document.getElementById("progress-forget-yes").addEventListener("click", function () {
     forget();
     refreshDialog(t("progress_forgotten"));
   });

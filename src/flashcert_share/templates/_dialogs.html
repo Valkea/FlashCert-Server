@@ -13,12 +13,22 @@
       <input type="checkbox" id="celebrations-toggle">
       <span><strong data-t="celebrations_toggle"></strong><span class="hint" data-t="celebrations_help"></span></span>
     </label>
+    {# Saving on or off, the actions keep their places: erasing sits apart, below, and asks first. #}
     <div class="dialog-actions">
-      <button type="button" class="btn danger ghost" id="progress-forget" data-t="progress_forget" hidden></button>
       <a class="btn ghost" href="{{ url_for('progress_page') }}" id="progress-stats"><svg class="icon"><use href="#i-chart"/></svg><span data-t="stats_open"></span></a>
       <span class="spacer"></span>
       <button value="cancel" class="btn ghost" id="progress-later" data-t="not_now"></button>
       <button type="button" class="btn" id="progress-enable" data-t="progress_enable"></button>
+    </div>
+    <div class="forget-zone" id="progress-forget-zone" hidden>
+      <button type="button" class="btn danger ghost small" id="progress-forget" data-t="progress_forget"></button>
+      <div class="forget-confirm" id="progress-forget-confirm" role="alertdialog" aria-labelledby="progress-forget-ask" hidden>
+        <p id="progress-forget-ask" data-t="progress_forget_ask"></p>
+        <div class="dialog-actions">
+          <button type="button" class="btn ghost small" id="progress-forget-keep" data-t="progress_forget_keep"></button>
+          <button type="button" class="btn danger small" id="progress-forget-yes" data-t="progress_forget_yes"></button>
+        </div>
+      </div>
     </div>
   </form>
 </dialog>

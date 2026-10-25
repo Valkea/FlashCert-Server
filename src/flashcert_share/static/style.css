@@ -382,6 +382,13 @@ h3.label { margin: 28px 0 8px; }
 .dialog-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; align-items: center; }
 .dialog-actions .spacer { flex: 1; }
 .facts { margin: 0 0 12px; padding-left: 20px; color: var(--muted); }
+.forget-zone { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--stroke); }
+.forget-zone.off { visibility: hidden; }
+@media (min-width: 601px) { #progress-status { min-height: 4.2em; } }
+.forget-confirm { padding: 12px 14px; border-radius: 14px; background: var(--bad-soft); }
+.forget-confirm p { margin: 0; font-weight: 600; }
+.forget-confirm .dialog-actions { justify-content: flex-end; margin-top: 10px; }
+.btn.danger:not(.ghost) { background: var(--bad); border-color: var(--bad); color: #fff; }
 .facts li { margin: 6px 0; }
 .status { min-height: 1.4em; font-weight: 600; }
 .status.good { color: var(--good); }

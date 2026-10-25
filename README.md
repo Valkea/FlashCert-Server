@@ -279,7 +279,7 @@ daily log of answers and the title it is listed by, `fcs:days` for
 the study days, `fcs:cert:{share id}` for a recap already shown), written only after the visitor clicks
 **Save my progress**. Mastering takes several study days, so in memory alone it rarely happens. Before that, answers are kept in memory for the visit and a small banner offers to save
 them (the answers given so far are saved too). **Your progress** in the header shows what was granted and how
-much space is used, and erases everything. `navigator.storage.persist()` is what protects the data from
+much space is used, and erases everything once confirmed. `navigator.storage.persist()` is what protects the data from
 eviction: Firefox asks the visitor, Chrome decides from site engagement or a bookmark, and the page says
 which way it went.
 
